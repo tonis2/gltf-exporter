@@ -1,8 +1,9 @@
 import bpy
 from bpy.props import EnumProperty, BoolProperty, StringProperty
-from bpy_extras.io_utils import ExportHelper
+from bpy_extras.io_utils import ExportHelper, ImportHelper
 
 from .exporter import ExportSettings, GltfExporter
+from .importer import ImportSettings, GltfImporter
 
 
 class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
@@ -134,15 +135,112 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
         return False
 
 
+class IMPORT_SCENE_OT_gltf(bpy.types.Operator, ImportHelper):
+    """Import a glTF 2.0 file"""
+    bl_idname = "import_scene.gltf_custom"
+    bl_label = "Import glTF 2.0"
+    bl_options = {"PRESET", "UNDO"}
+
+    filename_ext = ".glb"
+
+    filter_glob: StringProperty(
+        default="*.glb;*.gltf",
+        options={"HIDDEN"},
+    )
+
+    import_normals: BoolProperty(
+        name="Normals",
+        description="Import vertex normals",
+        default=True,
+    )
+
+    import_texcoords: BoolProperty(
+        name="UVs",
+        description="Import UV coordinates",
+        default=True,
+    )
+
+    import_materials: BoolProperty(
+        name="Materials",
+        description="Import PBR materials",
+        default=True,
+    )
+
+    import_colors: BoolProperty(
+        name="Vertex Colors",
+        description="Import vertex colors",
+        default=True,
+    )
+
+    import_animations: BoolProperty(
+        name="Animations",
+        description="Import keyframe animations",
+        default=True,
+    )
+
+    import_morph_targets: BoolProperty(
+        name="Shape Keys",
+        description="Import morph targets as shape keys",
+        default=True,
+    )
+
+    def execute(self, context):
+        settings = ImportSettings(
+            filepath=self.filepath,
+            import_normals=self.import_normals,
+            import_texcoords=self.import_texcoords,
+            import_materials=self.import_materials,
+            import_colors=self.import_colors,
+            import_animations=self.import_animations,
+            import_morph_targets=self.import_morph_targets,
+        )
+
+        try:
+            importer = GltfImporter(context, settings)
+            importer.import_file()
+            self.report({"INFO"}, f"Imported from {self.filepath}")
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+        return {"FINISHED"}
+
+    def draw(self, context):
+        layout = self.layout
+
+        box = layout.box()
+        box.label(text="Mesh")
+        box.prop(self, "import_normals")
+        box.prop(self, "import_texcoords")
+        box.prop(self, "import_colors")
+
+        box = layout.box()
+        box.label(text="Material")
+        box.prop(self, "import_materials")
+
+        box = layout.box()
+        box.label(text="Animation")
+        box.prop(self, "import_animations")
+        box.prop(self, "import_morph_targets")
+
+
 def menu_func_export(self, context):
     self.layout.operator(EXPORT_SCENE_OT_gltf.bl_idname, text="glTF 2.0 (.glb/.gltf) Custom")
 
 
+def menu_func_import(self, context):
+    self.layout.operator(IMPORT_SCENE_OT_gltf.bl_idname, text="glTF 2.0 (.glb/.gltf) Custom")
+
+
 def register():
     bpy.utils.register_class(EXPORT_SCENE_OT_gltf)
+    bpy.utils.register_class(IMPORT_SCENE_OT_gltf)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
+    bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
 
 
 def unregister():
+    bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
+    bpy.utils.unregister_class(IMPORT_SCENE_OT_gltf)
     bpy.utils.unregister_class(EXPORT_SCENE_OT_gltf)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, fields
 from typing import Any
 
@@ -9,6 +10,10 @@ def _to_camel_case(name: str) -> str:
     return parts[0] + "".join(p.capitalize() for p in parts[1:])
 
 
+def _to_snake_case(name: str) -> str:
+    return re.sub(r"([A-Z])", r"_\1", name).lower().lstrip("_")
+
+
 def _serialize(value: Any) -> Any:
     if hasattr(value, "to_dict"):
         return value.to_dict()
@@ -16,6 +21,25 @@ def _serialize(value: Any) -> Any:
         return [_serialize(v) for v in value]
     if isinstance(value, dict):
         return {k: _serialize(v) for k, v in value.items()}
+    return value
+
+
+# Registry: (ParentClass, field_name) -> nested dataclass type
+# Populated after all classes are defined (see bottom of file)
+_NESTED_TYPES: dict[tuple[type, str], type] = {}
+
+
+def _deserialize_field(value: Any, parent_cls: type, field_name: str) -> Any:
+    """Deserialize a single field value, recursing into nested types."""
+    nested_type = _NESTED_TYPES.get((parent_cls, field_name))
+    if nested_type is not None:
+        if isinstance(value, dict):
+            return nested_type.from_dict(value)
+        if isinstance(value, list):
+            return [
+                nested_type.from_dict(v) if isinstance(v, dict) else v
+                for v in value
+            ]
     return value
 
 
@@ -32,6 +56,19 @@ class GltfBase:
             key = _to_camel_case(f.name)
             result[key] = _serialize(value)
         return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GltfBase":
+        if data is None:
+            return None
+        field_names = {f.name for f in fields(cls)}
+        kwargs = {}
+        for key, value in data.items():
+            snake_key = _to_snake_case(key)
+            if snake_key not in field_names:
+                continue
+            kwargs[snake_key] = _deserialize_field(value, cls, snake_key)
+        return cls(**kwargs)
 
 
 # --- Core types ---
@@ -268,3 +305,31 @@ class Gltf(GltfBase):
     extensions_used: list[str] | None = None
     extensions_required: list[str] | None = None
     extras: Any | None = None
+
+
+# --- Nested type registry for deserialization ---
+_NESTED_TYPES.update({
+    (Gltf, "asset"): Asset,
+    (Gltf, "scenes"): Scene,
+    (Gltf, "nodes"): Node,
+    (Gltf, "meshes"): Mesh,
+    (Gltf, "accessors"): Accessor,
+    (Gltf, "buffer_views"): BufferView,
+    (Gltf, "buffers"): Buffer,
+    (Gltf, "materials"): Material,
+    (Gltf, "textures"): Texture,
+    (Gltf, "images"): Image,
+    (Gltf, "samplers"): Sampler,
+    (Gltf, "animations"): Animation,
+    (Mesh, "primitives"): MeshPrimitive,
+    (Material, "pbr_metallic_roughness"): MaterialPBRMetallicRoughness,
+    (Material, "normal_texture"): NormalTextureInfo,
+    (Material, "occlusion_texture"): OcclusionTextureInfo,
+    (Material, "emissive_texture"): TextureInfo,
+    (MaterialPBRMetallicRoughness, "base_color_texture"): TextureInfo,
+    (MaterialPBRMetallicRoughness, "metallic_roughness_texture"): TextureInfo,
+    (Animation, "channels"): AnimationChannel,
+    (Animation, "samplers"): AnimationSampler,
+    (AnimationChannel, "target"): AnimationChannelTarget,
+    (Accessor, "sparse"): AccessorSparse,
+})

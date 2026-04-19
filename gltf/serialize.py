@@ -95,6 +95,59 @@ def write_gltf(path: Path, gltf_dict: dict, binary: bytes | None = None) -> None
             f.write(binary)
 
 
+def read_glb(path: Path) -> tuple[dict, bytes]:
+    """Read a GLB (binary glTF) file. Returns (gltf_dict, binary_data)."""
+    with open(path, "rb") as f:
+        # GLB header: magic(4) + version(4) + length(4)
+        header = f.read(12)
+        if len(header) < 12 or header[:4] != b"glTF":
+            raise ValueError(f"Not a valid GLB file: {path}")
+        version, total_length = struct.unpack("<II", header[4:12])
+        if version != 2:
+            raise ValueError(f"Unsupported GLB version {version}, expected 2")
+
+        # Read JSON chunk
+        chunk_header = f.read(8)
+        chunk_length, chunk_type = struct.unpack("<I4s", chunk_header)
+        if chunk_type != b"JSON":
+            raise ValueError(f"Expected JSON chunk, got {chunk_type!r}")
+        json_data = f.read(chunk_length)
+        gltf_dict = json.loads(json_data)
+
+        # Read BIN chunk (optional)
+        binary = b""
+        remaining = total_length - 12 - 8 - chunk_length
+        if remaining > 8:
+            chunk_header = f.read(8)
+            chunk_length, chunk_type = struct.unpack("<I4s", chunk_header)
+            if chunk_type == b"BIN\x00":
+                binary = f.read(chunk_length)
+
+    return gltf_dict, binary
+
+
+def read_gltf(path: Path) -> tuple[dict, bytes | None]:
+    """Read a .gltf JSON file. Resolves external .bin or embedded base64 buffers."""
+    with open(path, "r", encoding="utf-8") as f:
+        gltf_dict = json.load(f)
+
+    binary = None
+    buffers = gltf_dict.get("buffers", [])
+    if buffers:
+        uri = buffers[0].get("uri")
+        if uri is not None:
+            if uri.startswith("data:"):
+                # Base64 data URI
+                encoded = uri.split(",", 1)[1]
+                binary = base64.b64decode(encoded)
+            else:
+                # External file
+                bin_path = path.parent / uri
+                binary = bin_path.read_bytes()
+
+    return gltf_dict, binary
+
+
 def write_gltf_embedded(path: Path, gltf_dict: dict, binary: bytes | None = None) -> None:
     """Write a single .gltf JSON file with all binary data embedded as base64 data URIs."""
     # Embed the buffer as a data URI

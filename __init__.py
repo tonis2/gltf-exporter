@@ -12,8 +12,18 @@ _needs_reload = "operator" in locals()
 
 from . import operator
 from . import exporter
+from . import importer
 from .gltf import constants, types, buffer, serialize
 from .export import converter, mesh, material, texture, scene, animation
+from .import_ import (
+    converter as import_converter,
+    buffer_reader,
+    mesh as import_mesh,
+    material as import_material,
+    texture as import_texture,
+    scene as import_scene,
+    animation as import_animation,
+)
 
 if _needs_reload:
     import importlib
@@ -29,6 +39,14 @@ if _needs_reload:
     texture = importlib.reload(texture)
     scene = importlib.reload(scene)
     animation = importlib.reload(animation)
+    importer = importlib.reload(importer)
+    import_converter = importlib.reload(import_converter)
+    buffer_reader = importlib.reload(buffer_reader)
+    import_mesh = importlib.reload(import_mesh)
+    import_material = importlib.reload(import_material)
+    import_texture = importlib.reload(import_texture)
+    import_scene = importlib.reload(import_scene)
+    import_animation = importlib.reload(import_animation)
 
 
 def register():
