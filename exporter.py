@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from .gltf.buffer import BufferBuilder
 from .gltf.serialize import write_glb, write_gltf, write_gltf_embedded
 from .gltf.types import Asset, Gltf
+from .export.animation import AnimationExporter
 from .export.texture import TextureExporter
 from .export.material import MaterialExporter
 from .export.mesh import MeshExporter
@@ -24,6 +25,9 @@ class ExportSettings:
     export_texcoords: bool = True
     export_materials: bool = True
     export_colors: bool = True
+    export_animations: bool = True
+    export_morph_targets: bool = True
+    export_gpu_instancing: bool = True
 
 
 class GltfExporter:
@@ -35,25 +39,42 @@ class GltfExporter:
         self.material_exporter = MaterialExporter(self.texture_exporter, settings)
         self.mesh_exporter = MeshExporter(self.buffer, settings)
         self.scene_exporter = SceneExporter(
-            self.mesh_exporter, self.material_exporter, settings,
+            self.mesh_exporter, self.material_exporter, self.buffer, settings,
         )
 
     def export(self) -> None:
         # 1. Gather scene data
         scenes, active_scene = self.scene_exporter.gather(self.context)
 
-        # 2. Finalize buffer
+        # 2. Gather animations (needs node mapping from scene pass)
+        animations = None
+        animation_exporter = None
+        if self.settings.export_animations:
+            animation_exporter = AnimationExporter(
+                self.buffer,
+                self.settings,
+                self.scene_exporter.object_to_node_index,
+                self.material_exporter._cache,
+            )
+            animation_exporter.gather(self.context)
+            if animation_exporter.animations:
+                animations = animation_exporter.animations
+
+        # 3. Finalize buffer
         accessors, buffer_views, buffer_desc, binary = self.buffer.finalize()
 
-        # 3. Handle .bin URI for separate format
+        # 4. Handle .bin URI for separate format
         if buffer_desc and self.settings.format == "GLTF_SEPARATE":
             bin_filename = Path(self.settings.filepath).stem + ".bin"
             buffer_desc.uri = bin_filename
 
-        # 4. Collect extensions used
-        extensions_used = sorted(self.scene_exporter.extensions_used) or None
+        # 5. Collect extensions used
+        all_extensions = set(self.scene_exporter.extensions_used)
+        if animation_exporter:
+            all_extensions |= animation_exporter.extensions_used
+        extensions_used = sorted(all_extensions) or None
 
-        # 5. Assemble glTF
+        # 6. Assemble glTF
         gltf = Gltf(
             asset=Asset(generator="gltf-exporter", version="2.0"),
             scene=active_scene,
@@ -67,6 +88,7 @@ class GltfExporter:
             textures=self.texture_exporter.textures or None,
             images=self.texture_exporter.images or None,
             samplers=self.texture_exporter.samplers or None,
+            animations=animations,
             extensions_used=extensions_used,
         )
 
