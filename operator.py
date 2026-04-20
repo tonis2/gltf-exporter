@@ -98,6 +98,7 @@ _EXPORT_PROPS = (
     "export_skinning",
     "export_physics",
     "export_only_visible",
+    "image_format",
 )
 
 
@@ -123,6 +124,15 @@ class GltfExportSceneSettings(bpy.types.PropertyGroup):
     export_skinning: BoolProperty(name="Skinning", default=True)
     export_physics: BoolProperty(name="Physics", default=True)
     export_only_visible: BoolProperty(name="Only Visible", default=False)
+    image_format: EnumProperty(
+        name="Image Format",
+        items=[
+            ("AUTO", "Auto", ""),
+            ("JPEG", "JPEG", ""),
+            ("PNG", "PNG", ""),
+        ],
+        default="AUTO",
+    )
 
 
 class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
@@ -208,6 +218,16 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
         default=False,
     )
 
+    image_format: EnumProperty(
+        name="Image Format",
+        description="Format for exported textures",
+        items=[
+            ("AUTO", "Auto", "Keep the original image format"),
+            ("JPEG", "JPEG", "Export all textures as JPEG"),
+            ("PNG", "PNG", "Export all textures as PNG"),
+        ],
+        default="AUTO",
+    )
 
     def invoke(self, context, event):
         # Load saved settings from the scene
@@ -235,6 +255,7 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
             export_skinning=self.export_skinning,
             export_physics=self.export_physics,
             export_only_visible=self.export_only_visible,
+            image_format=self.image_format,
         )
 
         try:
@@ -266,6 +287,7 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
         header.label(text="Material")
         if body:
             body.prop(self, "export_materials")
+            body.prop(self, "image_format")
 
         header, body = layout.panel("GLTF_export_animation", default_closed=True)
         header.label(text="Animation")

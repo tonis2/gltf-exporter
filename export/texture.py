@@ -107,34 +107,21 @@ class TextureExporter:
 
     def _write_image_file(self, blender_image: "bpy.types.Image") -> int:
         """Write image to a file alongside the .gltf and reference by URI."""
-        import os
         from pathlib import Path
 
-        # Determine output filename
+        # Determine output format
         base_dir = Path(self.settings.filepath).parent
-        ext = ".png"
-        mime_type = "image/png"
+        use_jpeg = self._should_use_jpeg(blender_image)
 
-        if blender_image.file_format == "JPEG":
-            ext = ".jpg"
-            mime_type = "image/jpeg"
+        if use_jpeg:
+            ext, mime_type = ".jpg", "image/jpeg"
+        else:
+            ext, mime_type = ".png", "image/png"
 
         filename = blender_image.name + ext
         filepath = base_dir / filename
 
-        # Save image to file
-        original_path = blender_image.filepath_raw
-        original_format = blender_image.file_format
-        try:
-            blender_image.filepath_raw = str(filepath)
-            if ext == ".jpg":
-                blender_image.file_format = "JPEG"
-            else:
-                blender_image.file_format = "PNG"
-            blender_image.save()
-        finally:
-            blender_image.filepath_raw = original_path
-            blender_image.file_format = original_format
+        self._save_image_to_path(blender_image, str(filepath), use_jpeg)
 
         index = len(self.images)
         self.images.append(Image(
@@ -160,38 +147,76 @@ class TextureExporter:
         ))
         return index
 
+    def _should_use_jpeg(self, blender_image: "bpy.types.Image") -> bool:
+        """Decide whether to export as JPEG based on settings and image properties."""
+        fmt = self.settings.image_format
+        if fmt == "JPEG":
+            return True
+        if fmt == "PNG":
+            return False
+        # AUTO: use source format
+        return blender_image.file_format == "JPEG"
+
+    def _save_image_to_path(
+        self, blender_image: "bpy.types.Image", filepath: str, use_jpeg: bool,
+    ) -> None:
+        """Save a Blender image to a file path.
+
+        For PNG, creates a temporary RGBA image so the output always has an
+        alpha channel (games expect RGBA textures).
+        """
+        import bpy
+
+        if use_jpeg:
+            original_path = blender_image.filepath_raw
+            original_format = blender_image.file_format
+            try:
+                blender_image.filepath_raw = filepath
+                blender_image.file_format = "JPEG"
+                blender_image.save()
+            finally:
+                blender_image.filepath_raw = original_path
+                blender_image.file_format = original_format
+        else:
+            # Create a temporary RGBA image to guarantee 4-channel PNG output.
+            # Blender's image.pixels always stores RGBA internally, but
+            # image.save() uses the source channel count (e.g. 3 for JPEG
+            # sources), which produces RGB-only PNGs.
+            import numpy as np
+
+            w, h = blender_image.size
+            pixel_count = w * h * 4
+            pixels = np.empty(pixel_count, dtype=np.float32)
+            blender_image.pixels.foreach_get(pixels)
+
+            tmp_img = bpy.data.images.new("__gltf_export_tmp__", w, h, alpha=True)
+            try:
+                tmp_img.pixels.foreach_set(pixels)
+                tmp_img.file_format = "PNG"
+                tmp_img.filepath_raw = filepath
+                tmp_img.save()
+            finally:
+                bpy.data.images.remove(tmp_img)
+
     def _get_image_bytes(self, blender_image: "bpy.types.Image") -> tuple[bytes, str]:
         """Get PNG or JPEG bytes for a Blender image."""
         import tempfile
         import os
-        from pathlib import Path
 
-        # Use a temporary file to save the image
-        if blender_image.file_format == "JPEG":
-            ext = ".jpg"
-            mime_type = "image/jpeg"
+        use_jpeg = self._should_use_jpeg(blender_image)
+        if use_jpeg:
+            ext, mime_type = ".jpg", "image/jpeg"
         else:
-            ext = ".png"
-            mime_type = "image/png"
+            ext, mime_type = ".png", "image/png"
 
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
             tmp_path = tmp.name
 
-        original_path = blender_image.filepath_raw
-        original_format = blender_image.file_format
         try:
-            blender_image.filepath_raw = tmp_path
-            if ext == ".jpg":
-                blender_image.file_format = "JPEG"
-            else:
-                blender_image.file_format = "PNG"
-            blender_image.save()
-
+            self._save_image_to_path(blender_image, tmp_path, use_jpeg)
             with open(tmp_path, "rb") as f:
                 data = f.read()
         finally:
-            blender_image.filepath_raw = original_path
-            blender_image.file_format = original_format
             os.unlink(tmp_path)
 
         return data, mime_type

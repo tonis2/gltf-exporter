@@ -33,6 +33,7 @@ class ExportSettings:
     export_skinning: bool = True
     export_physics: bool = True
     export_only_visible: bool = False
+    image_format: str = "AUTO"  # "AUTO", "JPEG", or "PNG"
 
 
 class GltfExporter:
