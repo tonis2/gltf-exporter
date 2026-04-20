@@ -208,13 +208,6 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
         default=False,
     )
 
-    # Section toggles (not exported, just for UI)
-    show_mesh: BoolProperty(name="Mesh", default=True, options={"HIDDEN"})
-    show_material: BoolProperty(name="Material", default=True, options={"HIDDEN"})
-    show_animation: BoolProperty(name="Animation", default=True, options={"HIDDEN"})
-    show_skinning: BoolProperty(name="Skinning", default=True, options={"HIDDEN"})
-    show_instancing: BoolProperty(name="Instancing", default=True, options={"HIDDEN"})
-    show_physics: BoolProperty(name="Physics", default=True, options={"HIDDEN"})
 
     def invoke(self, context, event):
         # Load saved settings from the scene
@@ -256,59 +249,44 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
 
     def draw(self, context):
         layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
         layout.prop(self, "export_format")
         layout.prop(self, "export_only_visible")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_mesh",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_mesh else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_mesh:
-            box.prop(self, "export_normals")
-            box.prop(self, "export_texcoords")
-            box.prop(self, "export_colors")
+        header, body = layout.panel("GLTF_export_mesh", default_closed=True)
+        header.label(text="Mesh")
+        if body:
+            body.prop(self, "export_normals")
+            body.prop(self, "export_texcoords")
+            body.prop(self, "export_colors")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_material",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_material else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_material:
-            box.prop(self, "export_materials")
+        header, body = layout.panel("GLTF_export_material", default_closed=True)
+        header.label(text="Material")
+        if body:
+            body.prop(self, "export_materials")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_animation",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_animation else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_animation:
-            box.prop(self, "export_animations")
-            box.prop(self, "export_morph_targets")
+        header, body = layout.panel("GLTF_export_animation", default_closed=True)
+        header.label(text="Animation")
+        if body:
+            body.prop(self, "export_animations")
+            body.prop(self, "export_morph_targets")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_skinning",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_skinning else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_skinning:
-            box.prop(self, "export_skinning")
+        header, body = layout.panel("GLTF_export_skinning", default_closed=True)
+        header.label(text="Skinning")
+        if body:
+            body.prop(self, "export_skinning")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_instancing",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_instancing else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_instancing:
-            box.prop(self, "export_gpu_instancing")
+        header, body = layout.panel("GLTF_export_instancing", default_closed=True)
+        header.label(text="Instancing")
+        if body:
+            body.prop(self, "export_gpu_instancing")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_physics",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_physics else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_physics:
-            box.prop(self, "export_physics")
+        header, body = layout.panel("GLTF_export_physics", default_closed=True)
+        header.label(text="Physics")
+        if body:
+            body.prop(self, "export_physics")
 
     def check(self, context):
         # Update file extension based on format
@@ -389,13 +367,6 @@ class IMPORT_SCENE_OT_gltf(bpy.types.Operator, ImportHelper):
         default=True,
     )
 
-    # Section toggles (not imported, just for UI)
-    show_mesh: BoolProperty(name="Mesh", default=True, options={"HIDDEN"})
-    show_material: BoolProperty(name="Material", default=True, options={"HIDDEN"})
-    show_animation: BoolProperty(name="Animation", default=True, options={"HIDDEN"})
-    show_skinning: BoolProperty(name="Skinning", default=True, options={"HIDDEN"})
-    show_physics: BoolProperty(name="Physics", default=True, options={"HIDDEN"})
-
     def execute(self, context):
         settings = ImportSettings(
             filepath=self.filepath,
@@ -421,49 +392,36 @@ class IMPORT_SCENE_OT_gltf(bpy.types.Operator, ImportHelper):
 
     def draw(self, context):
         layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_mesh",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_mesh else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_mesh:
-            box.prop(self, "import_normals")
-            box.prop(self, "import_texcoords")
-            box.prop(self, "import_colors")
+        header, body = layout.panel("GLTF_import_mesh", default_closed=True)
+        header.label(text="Mesh")
+        if body:
+            body.prop(self, "import_normals")
+            body.prop(self, "import_texcoords")
+            body.prop(self, "import_colors")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_material",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_material else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_material:
-            box.prop(self, "import_materials")
+        header, body = layout.panel("GLTF_import_material", default_closed=True)
+        header.label(text="Material")
+        if body:
+            body.prop(self, "import_materials")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_animation",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_animation else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_animation:
-            box.prop(self, "import_animations")
-            box.prop(self, "import_morph_targets")
+        header, body = layout.panel("GLTF_import_animation", default_closed=True)
+        header.label(text="Animation")
+        if body:
+            body.prop(self, "import_animations")
+            body.prop(self, "import_morph_targets")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_skinning",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_skinning else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_skinning:
-            box.prop(self, "import_skinning")
+        header, body = layout.panel("GLTF_import_skinning", default_closed=True)
+        header.label(text="Skinning")
+        if body:
+            body.prop(self, "import_skinning")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "show_physics",
-                 icon="DISCLOSURE_TRI_DOWN" if self.show_physics else "DISCLOSURE_TRI_RIGHT",
-                 emboss=False)
-        if self.show_physics:
-            box.prop(self, "import_physics")
+        header, body = layout.panel("GLTF_import_physics", default_closed=True)
+        header.label(text="Physics")
+        if body:
+            body.prop(self, "import_physics")
 
 
 def menu_func_export(self, context):
