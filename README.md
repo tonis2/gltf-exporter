@@ -1,2 +1,36 @@
-# gltf-exporter
-Blender GLTF exporter
+# Blender glTF 2.0 Exporter/Importer
+
+A custom Blender addon for exporting and importing scenes in glTF 2.0 format.
+
+## Features
+
+- **Meshes** — geometry with normals, UVs, and vertex colors
+- **PBR Materials & Textures**
+- **Animations** — keyframe animations
+- **Shape Keys** — morph targets
+- **Armatures & Skinning** — skeletal animation with bone weights
+- **Physics** — rigid bodies and collision shapes (KHR extensions)
+- **GPU Instancing** — collection instances via `EXT_mesh_gpu_instancing`
+- **Export formats** — GLB (binary), glTF + .bin (separate), glTF embedded (base64)
+
+## Requirements
+
+- Blender 4.2.0 or newer
+
+## Installation
+
+1. Download the latest `.zip` release from the [Releases](../../releases) page
+2. Open Blender
+3. Go to **Edit > Preferences > Add-ons**
+4. Click **Install from Disk...** (dropdown arrow in the top-right)
+5. Select the downloaded `.zip` file
+6. Enable the addon by checking the checkbox next to **"glTF 2.0 Exporter (Custom)"**
+
+## Usage
+
+- **Export:** File > Export > glTF 2.0
+- **Import:** File > Import > glTF 2.0
+
+## License
+
+Apache 2.0
