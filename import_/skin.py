@@ -30,21 +30,44 @@ class SkinImporter:
         self.bone_node_to_armature: dict[int, tuple["bpy.types.Object", str]] = {}
         # All joint node indices across all skins (to skip during scene traversal)
         self.joint_node_indices: set[int] = set()
+        # Nodes that are direct parents of root joints (armature wrapper nodes)
+        self.armature_node_indices: set[int] = set()
+        # armature wrapper node index -> skin index
+        self.skin_for_node: dict[int, int] = {}
+        # skin_index -> joint_to_bone_name mapping (for deferred weight application)
+        self._skin_joint_names: dict[int, dict[int, str]] = {}
 
-        # Pre-compute joint node indices
-        if gltf.skins:
-            for skin in gltf.skins:
+        if gltf.skins and gltf.nodes:
+            # Build parent map
+            parent_map: dict[int, int] = {}
+            for i, node in enumerate(gltf.nodes):
+                if node.children:
+                    for child in node.children:
+                        parent_map[child] = i
+
+            for skin_idx, skin in enumerate(gltf.skins):
+                joint_set = set(skin.joints)
                 for j in skin.joints:
                     self.joint_node_indices.add(j)
+                # Find armature wrapper nodes: parents of root joints
+                for joint_idx in skin.joints:
+                    parent_idx = parent_map.get(joint_idx)
+                    if parent_idx is not None and parent_idx not in joint_set:
+                        self.armature_node_indices.add(parent_idx)
+                        self.skin_for_node[parent_idx] = skin_idx
 
-    def import_skin(
+    def create_armature(
         self,
         context: "bpy.types.Context",
         skin_index: int,
-        mesh_obj: "bpy.types.Object",
         collection: "bpy.types.Collection",
+        armature_world: "mathutils.Matrix | None" = None,
     ) -> "bpy.types.Object":
-        """Create an armature from a glTF skin, apply vertex weights, return armature object."""
+        """Create an armature from a glTF skin. Returns the armature object.
+
+        armature_world: the armature's expected world matrix, used to
+        transform bone positions from world space to armature-local space.
+        """
         import bpy
         import mathutils
 
@@ -58,12 +81,10 @@ class SkinImporter:
             # Shape: (num_joints, 16) for MAT4
             ibms = ibm_data.reshape(-1, 16)
 
-        # Compute joint world transforms (for bone head/tail/roll)
+        # Compute joint bind matrices (world-space bone transforms)
         joint_bind_matrices: list[mathutils.Matrix] = []
         for i, joint_idx in enumerate(skin.joints):
             if ibms is not None:
-                # IBM converts from mesh space to bone space in glTF coords
-                # bind_matrix = inverse(IBM) converted to Blender coords
                 ibm_gltf = ibms[i].tolist()
                 ibm_blender = convert_matrix(ibm_gltf)
                 bind_mat = ibm_blender.inverted()
@@ -71,6 +92,11 @@ class SkinImporter:
                 # No IBMs: compute from node hierarchy
                 bind_mat = self._compute_node_world_transform(joint_idx)
             joint_bind_matrices.append(bind_mat)
+
+        # Transform bind matrices from world space to armature-local space
+        if armature_world is not None:
+            arm_world_inv = armature_world.inverted()
+            joint_bind_matrices = [arm_world_inv @ m for m in joint_bind_matrices]
 
         # Create armature
         armature_data = bpy.data.armatures.new(name)
@@ -123,18 +149,41 @@ class SkinImporter:
         for joint_idx, bone_name in joint_to_bone_name.items():
             self.bone_node_to_armature[joint_idx] = (armature_obj, bone_name)
 
-        # Apply vertex weights to mesh
+        # Store for deferred weight application
+        self._skin_joint_names[skin_index] = joint_to_bone_name
+
+        return armature_obj
+
+    def apply_skin_to_mesh(
+        self,
+        mesh_obj: "bpy.types.Object",
+        skin_index: int,
+        armature_obj: "bpy.types.Object",
+    ) -> None:
+        """Apply vertex weights and armature modifier to a mesh object."""
+        skin = self.gltf.skins[skin_index]
+        joint_to_bone_name = self._skin_joint_names.get(skin_index, {})
+
         if mesh_obj and mesh_obj.data:
             node = self._find_mesh_node(mesh_obj.name)
             if node is not None and node.mesh is not None:
                 self._apply_vertex_weights(
                     mesh_obj, node.mesh, skin.joints, joint_to_bone_name,
                 )
-
-            # Add Armature modifier
             mod = mesh_obj.modifiers.new(name="Armature", type="ARMATURE")
             mod.object = armature_obj
 
+    def import_skin(
+        self,
+        context: "bpy.types.Context",
+        skin_index: int,
+        mesh_obj: "bpy.types.Object",
+        collection: "bpy.types.Collection",
+        armature_world=None,
+    ) -> "bpy.types.Object":
+        """Create an armature from a glTF skin, apply vertex weights, return armature object."""
+        armature_obj = self.create_armature(context, skin_index, collection, armature_world)
+        self.apply_skin_to_mesh(mesh_obj, skin_index, armature_obj)
         return armature_obj
 
     def _compute_bone_length(

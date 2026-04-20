@@ -218,14 +218,21 @@ class PhysicsExporter:
         depsgraph = bpy.context.evaluated_depsgraph_get()
         eval_obj = obj.evaluated_get(depsgraph)
         mesh = eval_obj.to_mesh()
-        if mesh is None:
-            # Fallback for empties or objects without mesh data
-            shape = self._compute_shape_from_dimensions(obj, shape_type)
-        else:
+        shape = None
+        if mesh is not None:
             try:
                 shape = self._compute_shape(mesh, shape_type)
             finally:
                 eval_obj.to_mesh_clear()
+
+        # Fallback: evaluated mesh may be empty (e.g. Geometry Nodes
+        # that output only instances).  Try the original mesh data.
+        if shape is None and obj.data and hasattr(obj.data, "vertices") and len(obj.data.vertices) > 0:
+            shape = self._compute_shape(obj.data, shape_type)
+
+        # Last resort: derive shape from object dimensions
+        if shape is None:
+            shape = self._compute_shape_from_dimensions(obj, shape_type)
 
         if shape is None:
             return None

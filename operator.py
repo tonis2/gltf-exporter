@@ -86,6 +86,43 @@ class PHYSICS_PT_khr_physics(bpy.types.Panel):
         col.prop(props, "restitution_combine")
 
 
+_EXPORT_PROPS = (
+    "export_format",
+    "export_normals",
+    "export_texcoords",
+    "export_materials",
+    "export_colors",
+    "export_animations",
+    "export_morph_targets",
+    "export_gpu_instancing",
+    "export_skinning",
+    "export_physics",
+)
+
+
+class GltfExportSceneSettings(bpy.types.PropertyGroup):
+    """Export settings stored per scene, persisted with the .blend file."""
+
+    export_format: EnumProperty(
+        name="Format",
+        items=[
+            ("GLB", "glTF Binary (.glb)", ""),
+            ("GLTF_SEPARATE", "glTF Separate (.gltf + .bin)", ""),
+            ("GLTF_EMBEDDED", "glTF Embedded (.gltf)", ""),
+        ],
+        default="GLB",
+    )
+    export_normals: BoolProperty(name="Normals", default=True)
+    export_texcoords: BoolProperty(name="UVs", default=True)
+    export_materials: BoolProperty(name="Materials", default=True)
+    export_colors: BoolProperty(name="Vertex Colors", default=True)
+    export_animations: BoolProperty(name="Animations", default=True)
+    export_morph_targets: BoolProperty(name="Shape Keys", default=True)
+    export_gpu_instancing: BoolProperty(name="GPU Instancing", default=True)
+    export_skinning: BoolProperty(name="Skinning", default=True)
+    export_physics: BoolProperty(name="Physics", default=True)
+
+
 class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
     """Export scene as glTF 2.0"""
     bl_idname = "export_scene.gltf_custom"
@@ -171,7 +208,19 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
     show_instancing: BoolProperty(name="Instancing", default=True, options={"HIDDEN"})
     show_physics: BoolProperty(name="Physics", default=True, options={"HIDDEN"})
 
+    def invoke(self, context, event):
+        # Load saved settings from the scene
+        saved = context.scene.gltf_export_settings
+        for prop in _EXPORT_PROPS:
+            setattr(self, prop, getattr(saved, prop))
+        return super().invoke(context, event)
+
     def execute(self, context):
+        # Save settings back to the scene so they persist with the .blend
+        saved = context.scene.gltf_export_settings
+        for prop in _EXPORT_PROPS:
+            setattr(saved, prop, getattr(self, prop))
+
         settings = ExportSettings(
             filepath=self.filepath,
             format=self.export_format,
@@ -419,6 +468,8 @@ def register():
     bpy.utils.register_class(KHR_PhysicsProperties)
     bpy.types.Object.khr_physics = bpy.props.PointerProperty(type=KHR_PhysicsProperties)
     bpy.utils.register_class(PHYSICS_PT_khr_physics)
+    bpy.utils.register_class(GltfExportSceneSettings)
+    bpy.types.Scene.gltf_export_settings = bpy.props.PointerProperty(type=GltfExportSceneSettings)
     bpy.utils.register_class(EXPORT_SCENE_OT_gltf)
     bpy.utils.register_class(IMPORT_SCENE_OT_gltf)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
@@ -430,6 +481,8 @@ def unregister():
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
     bpy.utils.unregister_class(IMPORT_SCENE_OT_gltf)
     bpy.utils.unregister_class(EXPORT_SCENE_OT_gltf)
+    del bpy.types.Scene.gltf_export_settings
+    bpy.utils.unregister_class(GltfExportSceneSettings)
     bpy.utils.unregister_class(PHYSICS_PT_khr_physics)
     del bpy.types.Object.khr_physics
     bpy.utils.unregister_class(KHR_PhysicsProperties)

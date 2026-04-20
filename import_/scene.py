@@ -34,6 +34,7 @@ class SceneImporter:
         self.skin_importer = skin_importer
         self.physics_importer = physics_importer
         self.node_to_blender: dict[int, "bpy.types.Object"] = {}
+        self._skin_armatures: dict[int, "bpy.types.Object"] = {}
 
     def import_scene(self, context: "bpy.types.Context") -> dict[int, "bpy.types.Object"]:
         scene_index = self.gltf.scene if self.gltf.scene is not None else 0
@@ -68,6 +69,33 @@ class SceneImporter:
                 and node_index in self.skin_importer.joint_node_indices):
             return
 
+        # Handle armature wrapper nodes: create the armature here
+        # instead of creating an empty + a duplicate armature at the mesh
+        if (self.skin_importer and self.settings.import_skinning
+                and node_index in self.skin_importer.armature_node_indices):
+            skin_index = self.skin_importer.skin_for_node[node_index]
+
+            # Compute armature's world matrix so bones are placed in
+            # armature-local space rather than world space
+            context.view_layer.update()
+            arm_world = self._get_node_world_matrix(node, parent_obj)
+
+            armature_obj = self.skin_importer.create_armature(
+                context, skin_index, collection, arm_world,
+            )
+            self._apply_transform(armature_obj, node)
+            if parent_obj:
+                armature_obj.parent = parent_obj
+            self.node_to_blender[node_index] = armature_obj
+            self._skin_armatures[skin_index] = armature_obj
+
+            if node.children:
+                for child_index in node.children:
+                    self._import_node(
+                        context, child_index, collection, parent_obj=armature_obj,
+                    )
+            return
+
         # Check for EXT_mesh_gpu_instancing
         if node.extensions and "EXT_mesh_gpu_instancing" in node.extensions:
             self._import_gpu_instanced_node(context, node, node_index, collection, parent_obj)
@@ -94,15 +122,23 @@ class SceneImporter:
 
         self.node_to_blender[node_index] = obj
 
-        # Handle skinned mesh: create armature and apply weights
+        # Handle skinned mesh: apply weights to pre-created armature or create one
         if (node.skin is not None and self.skin_importer
                 and self.settings.import_skinning):
-            armature_obj = self.skin_importer.import_skin(
-                context, node.skin, obj, collection,
-            )
-            self._apply_transform(armature_obj, node)
-            if parent_obj:
-                armature_obj.parent = parent_obj
+            if node.skin in self._skin_armatures:
+                # Armature was already created at its wrapper node
+                armature_obj = self._skin_armatures[node.skin]
+                self.skin_importer.apply_skin_to_mesh(obj, node.skin, armature_obj)
+            else:
+                # Fallback: create armature at the mesh node
+                context.view_layer.update()
+                arm_world = self._get_node_world_matrix(node, parent_obj)
+                armature_obj = self.skin_importer.import_skin(
+                    context, node.skin, obj, collection, arm_world,
+                )
+                self._apply_transform(armature_obj, node)
+                if parent_obj:
+                    armature_obj.parent = parent_obj
             # Clear transform on mesh since armature carries it
             obj.location = (0, 0, 0)
             obj.rotation_quaternion = (1, 0, 0, 0)
@@ -125,6 +161,19 @@ class SceneImporter:
         if node.children:
             for child_index in node.children:
                 self._import_node(context, child_index, collection, parent_obj=obj)
+
+    def _get_node_world_matrix(self, node: "Node", parent_obj: "bpy.types.Object | None"):
+        """Compute the expected world matrix for a node from its TRS and parent."""
+        import mathutils
+
+        loc = mathutils.Vector(convert_location(node.translation)) if node.translation else mathutils.Vector()
+        quat = mathutils.Quaternion(convert_rotation(node.rotation)) if node.rotation else mathutils.Quaternion()
+        scl = mathutils.Vector(convert_scale(node.scale)) if node.scale else mathutils.Vector((1, 1, 1))
+        local = mathutils.Matrix.LocRotScale(loc, quat, scl)
+
+        if parent_obj:
+            return parent_obj.matrix_world @ local
+        return local
 
     def _apply_transform(self, obj: "bpy.types.Object", node: "Node") -> None:
         if node.matrix:
