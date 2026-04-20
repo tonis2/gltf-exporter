@@ -77,6 +77,13 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
         default=True,
     )
 
+    # Section toggles (not exported, just for UI)
+    show_mesh: BoolProperty(name="Mesh", default=True, options={"HIDDEN"})
+    show_material: BoolProperty(name="Material", default=True, options={"HIDDEN"})
+    show_animation: BoolProperty(name="Animation", default=True, options={"HIDDEN"})
+    show_skinning: BoolProperty(name="Skinning", default=True, options={"HIDDEN"})
+    show_instancing: BoolProperty(name="Instancing", default=True, options={"HIDDEN"})
+
     def execute(self, context):
         settings = ExportSettings(
             filepath=self.filepath,
@@ -106,27 +113,47 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
         layout.prop(self, "export_format")
 
         box = layout.box()
-        box.label(text="Mesh")
-        box.prop(self, "export_normals")
-        box.prop(self, "export_texcoords")
-        box.prop(self, "export_colors")
+        row = box.row()
+        row.prop(self, "show_mesh",
+                 icon="DISCLOSURE_TRI_DOWN" if self.show_mesh else "DISCLOSURE_TRI_RIGHT",
+                 emboss=False)
+        if self.show_mesh:
+            box.prop(self, "export_normals")
+            box.prop(self, "export_texcoords")
+            box.prop(self, "export_colors")
 
         box = layout.box()
-        box.label(text="Material")
-        box.prop(self, "export_materials")
+        row = box.row()
+        row.prop(self, "show_material",
+                 icon="DISCLOSURE_TRI_DOWN" if self.show_material else "DISCLOSURE_TRI_RIGHT",
+                 emboss=False)
+        if self.show_material:
+            box.prop(self, "export_materials")
 
         box = layout.box()
-        box.label(text="Animation")
-        box.prop(self, "export_animations")
-        box.prop(self, "export_morph_targets")
+        row = box.row()
+        row.prop(self, "show_animation",
+                 icon="DISCLOSURE_TRI_DOWN" if self.show_animation else "DISCLOSURE_TRI_RIGHT",
+                 emboss=False)
+        if self.show_animation:
+            box.prop(self, "export_animations")
+            box.prop(self, "export_morph_targets")
 
         box = layout.box()
-        box.label(text="Skinning")
-        box.prop(self, "export_skinning")
+        row = box.row()
+        row.prop(self, "show_skinning",
+                 icon="DISCLOSURE_TRI_DOWN" if self.show_skinning else "DISCLOSURE_TRI_RIGHT",
+                 emboss=False)
+        if self.show_skinning:
+            box.prop(self, "export_skinning")
 
         box = layout.box()
-        box.label(text="Instancing")
-        box.prop(self, "export_gpu_instancing")
+        row = box.row()
+        row.prop(self, "show_instancing",
+                 icon="DISCLOSURE_TRI_DOWN" if self.show_instancing else "DISCLOSURE_TRI_RIGHT",
+                 emboss=False)
+        if self.show_instancing:
+            box.prop(self, "export_gpu_instancing")
 
     def check(self, context):
         # Update file extension based on format
@@ -201,6 +228,12 @@ class IMPORT_SCENE_OT_gltf(bpy.types.Operator, ImportHelper):
         default=True,
     )
 
+    # Section toggles (not imported, just for UI)
+    show_mesh: BoolProperty(name="Mesh", default=True, options={"HIDDEN"})
+    show_material: BoolProperty(name="Material", default=True, options={"HIDDEN"})
+    show_animation: BoolProperty(name="Animation", default=True, options={"HIDDEN"})
+    show_skinning: BoolProperty(name="Skinning", default=True, options={"HIDDEN"})
+
     def execute(self, context):
         settings = ImportSettings(
             filepath=self.filepath,
@@ -227,23 +260,39 @@ class IMPORT_SCENE_OT_gltf(bpy.types.Operator, ImportHelper):
         layout = self.layout
 
         box = layout.box()
-        box.label(text="Mesh")
-        box.prop(self, "import_normals")
-        box.prop(self, "import_texcoords")
-        box.prop(self, "import_colors")
+        row = box.row()
+        row.prop(self, "show_mesh",
+                 icon="DISCLOSURE_TRI_DOWN" if self.show_mesh else "DISCLOSURE_TRI_RIGHT",
+                 emboss=False)
+        if self.show_mesh:
+            box.prop(self, "import_normals")
+            box.prop(self, "import_texcoords")
+            box.prop(self, "import_colors")
 
         box = layout.box()
-        box.label(text="Material")
-        box.prop(self, "import_materials")
+        row = box.row()
+        row.prop(self, "show_material",
+                 icon="DISCLOSURE_TRI_DOWN" if self.show_material else "DISCLOSURE_TRI_RIGHT",
+                 emboss=False)
+        if self.show_material:
+            box.prop(self, "import_materials")
 
         box = layout.box()
-        box.label(text="Animation")
-        box.prop(self, "import_animations")
-        box.prop(self, "import_morph_targets")
+        row = box.row()
+        row.prop(self, "show_animation",
+                 icon="DISCLOSURE_TRI_DOWN" if self.show_animation else "DISCLOSURE_TRI_RIGHT",
+                 emboss=False)
+        if self.show_animation:
+            box.prop(self, "import_animations")
+            box.prop(self, "import_morph_targets")
 
         box = layout.box()
-        box.label(text="Skinning")
-        box.prop(self, "import_skinning")
+        row = box.row()
+        row.prop(self, "show_skinning",
+                 icon="DISCLOSURE_TRI_DOWN" if self.show_skinning else "DISCLOSURE_TRI_RIGHT",
+                 emboss=False)
+        if self.show_skinning:
+            box.prop(self, "import_skinning")
 
 
 def menu_func_export(self, context):
