@@ -1,13 +1,13 @@
 schema_version = "1.0.0"
 
-id = "gltf_exporter"
-version = "1.0.0"
-name = "glTF 2.0 Exporter"
-tagline = "Export Blender scenes to glTF 2.0 with experimental features"
+id = "gltf_"
+version = "1.0.1"
+name = "Blender glTF 2.0"
+tagline = "Export/Import Blender scenes to glTF 2.0 with experimental features"
 maintainer = "Tonis"
 type = "add-on"
 
-tags = ["Import-Export"]
+tags = ["Import-Export", "GLTF 2.0", "GLTF"]
 
 blender_version_min = "4.2.0"
 
