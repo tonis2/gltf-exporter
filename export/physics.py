@@ -62,13 +62,17 @@ class PhysicsExporter:
         geometry = self._gather_geometry(obj, rb, mesh_index)
         if geometry is not None:
             collider: dict = {"geometry": geometry}
-            mat_idx = self._gather_physics_material(rb)
+            mat_idx = self._gather_physics_material(obj)
             if mat_idx is not None:
                 collider["physicsMaterial"] = mat_idx
             filter_idx = self._gather_collision_filter(rb)
             if filter_idx is not None:
                 collider["collisionFilter"] = filter_idx
-            ext["collider"] = collider
+            props = obj.khr_physics
+            if props.is_trigger:
+                ext["trigger"] = collider
+            else:
+                ext["collider"] = collider
 
         # Motion (dynamic rigid body) — only on standalone bodies, not compound children
         if rb.type == "ACTIVE" and rb.enabled and not is_compound_child:
@@ -330,16 +334,28 @@ class PhysicsExporter:
             }
         return None
 
-    def _gather_physics_material(self, rb) -> int | None:
-        key = (round(rb.friction, 6), round(rb.restitution, 6))
+    def _gather_physics_material(self, obj: "bpy.types.Object") -> int | None:
+        rb = obj.rigid_body
+        props = obj.khr_physics
+        friction = round(rb.friction, 6)
+        restitution = round(rb.restitution, 6)
+        friction_combine = props.friction_combine.lower()
+        restitution_combine = props.restitution_combine.lower()
+
+        key = (friction, restitution, friction_combine, restitution_combine)
         if key in self._material_cache:
             return self._material_cache[key]
 
         mat: dict = {
-            "staticFriction": key[0],
-            "dynamicFriction": key[0],
-            "restitution": key[1],
+            "staticFriction": friction,
+            "dynamicFriction": friction,
+            "restitution": restitution,
         }
+        if friction_combine != "average":
+            mat["frictionCombine"] = friction_combine
+        if restitution_combine != "average":
+            mat["restitutionCombine"] = restitution_combine
+
         idx = len(self.physics_materials)
         self.physics_materials.append(mat)
         self._material_cache[key] = idx
@@ -369,6 +385,21 @@ class PhysicsExporter:
         motion: dict = {"mass": rb.mass}
         if rb.kinematic:
             motion["isKinematic"] = True
+
+        props = obj.khr_physics
+
+        lv = props.linear_velocity
+        if lv[0] != 0 or lv[1] != 0 or lv[2] != 0:
+            motion["linearVelocity"] = convert_location((lv[0], lv[1], lv[2]))
+
+        av = props.angular_velocity
+        if av[0] != 0 or av[1] != 0 or av[2] != 0:
+            motion["angularVelocity"] = convert_location((av[0], av[1], av[2]))
+
+        gf = props.gravity_factor
+        if gf != 1.0:
+            motion["gravityFactor"] = gf
+
         return motion
 
     def _gather_joint_description(self, rbc) -> dict:

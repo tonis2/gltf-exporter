@@ -70,6 +70,7 @@ class PhysicsImporter:
 
         if collider or motion or trigger:
             self._create_rigid_body(context, obj, collider, motion, trigger)
+            self._apply_khr_properties(obj, collider, motion, trigger)
 
     def fixup_joints(
         self,
@@ -180,6 +181,48 @@ class PhysicsImporter:
                 rb.mass = mass
             if motion.get("isKinematic", False):
                 rb.kinematic = True
+
+    def _apply_khr_properties(
+        self,
+        obj: "bpy.types.Object",
+        collider: dict | None,
+        motion: dict | None,
+        trigger: dict | None,
+    ) -> None:
+        """Set the custom KHR physics properties from imported data."""
+        props = obj.khr_physics
+
+        # Motion properties
+        if motion is not None:
+            lv = motion.get("linearVelocity")
+            if lv is not None:
+                props.linear_velocity = convert_location((lv[0], lv[1], lv[2]))
+            av = motion.get("angularVelocity")
+            if av is not None:
+                props.angular_velocity = convert_location((av[0], av[1], av[2]))
+            gf = motion.get("gravityFactor")
+            if gf is not None:
+                props.gravity_factor = gf
+
+        # Trigger flag
+        props.is_trigger = trigger is not None
+
+        # Physics material properties
+        geom_data = collider or trigger
+        if geom_data:
+            mat_idx = geom_data.get("physicsMaterial")
+            if mat_idx is not None and mat_idx < len(self.physics_materials):
+                mat = self.physics_materials[mat_idx]
+                combine_map = {
+                    "average": "AVERAGE",
+                    "minimum": "MINIMUM",
+                    "maximum": "MAXIMUM",
+                    "multiply": "MULTIPLY",
+                }
+                fc = mat.get("frictionCombine", "average")
+                props.friction_combine = combine_map.get(fc, "AVERAGE")
+                rc = mat.get("restitutionCombine", "average")
+                props.restitution_combine = combine_map.get(rc, "AVERAGE")
 
     def _apply_collision_shape(self, rb, geometry: dict) -> None:
         """Set the rigid body collision shape from geometry data."""

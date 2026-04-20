@@ -1,9 +1,89 @@
 import bpy
-from bpy.props import EnumProperty, BoolProperty, StringProperty
+from bpy.props import EnumProperty, BoolProperty, StringProperty, FloatProperty, FloatVectorProperty
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 
 from .exporter import ExportSettings, GltfExporter
 from .importer import ImportSettings, GltfImporter
+
+
+COMBINE_MODES = [
+    ("AVERAGE", "Average", "Average of the two values"),
+    ("MINIMUM", "Minimum", "Smaller of the two values"),
+    ("MAXIMUM", "Maximum", "Larger of the two values"),
+    ("MULTIPLY", "Multiply", "Product of the two values"),
+]
+
+
+class KHR_PhysicsProperties(bpy.types.PropertyGroup):
+    """Custom properties for KHR_physics_rigid_bodies export."""
+
+    # Motion
+    linear_velocity: FloatVectorProperty(
+        name="Linear Velocity",
+        size=3,
+        default=(0.0, 0.0, 0.0),
+    )
+    angular_velocity: FloatVectorProperty(
+        name="Angular Velocity",
+        size=3,
+        default=(0.0, 0.0, 0.0),
+    )
+    gravity_factor: FloatProperty(
+        name="Gravity Factor",
+        default=1.0,
+    )
+
+    # Collisions
+    is_trigger: BoolProperty(
+        name="Is Trigger",
+        description="Export as a trigger volume instead of a solid collider",
+        default=False,
+    )
+    friction_combine: EnumProperty(
+        name="Friction Combine mode",
+        items=COMBINE_MODES,
+        default="AVERAGE",
+    )
+    restitution_combine: EnumProperty(
+        name="Restitution Combine mode",
+        items=COMBINE_MODES,
+        default="AVERAGE",
+    )
+
+
+class PHYSICS_PT_khr_physics(bpy.types.Panel):
+    """Panel in the physics properties for KHR physics extension settings."""
+    bl_label = "KHR Physics Extensions"
+    bl_idname = "PHYSICS_PT_khr_physics"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "physics"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and obj.rigid_body is not None
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.active_object.khr_physics
+
+        # Motion
+        box = layout.box()
+        box.label(text="Motion")
+        col = box.column()
+        col.prop(props, "linear_velocity")
+        col.prop(props, "angular_velocity")
+        col.prop(props, "gravity_factor")
+
+        # Collisions
+        box = layout.box()
+        box.label(text="Collisions")
+        col = box.column()
+        col.prop(props, "is_trigger")
+        col.prop(props, "friction_combine")
+        col.prop(props, "restitution_combine")
 
 
 class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
@@ -336,6 +416,9 @@ def menu_func_import(self, context):
 
 
 def register():
+    bpy.utils.register_class(KHR_PhysicsProperties)
+    bpy.types.Object.khr_physics = bpy.props.PointerProperty(type=KHR_PhysicsProperties)
+    bpy.utils.register_class(PHYSICS_PT_khr_physics)
     bpy.utils.register_class(EXPORT_SCENE_OT_gltf)
     bpy.utils.register_class(IMPORT_SCENE_OT_gltf)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
@@ -347,3 +430,6 @@ def unregister():
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
     bpy.utils.unregister_class(IMPORT_SCENE_OT_gltf)
     bpy.utils.unregister_class(EXPORT_SCENE_OT_gltf)
+    bpy.utils.unregister_class(PHYSICS_PT_khr_physics)
+    del bpy.types.Object.khr_physics
+    bpy.utils.unregister_class(KHR_PhysicsProperties)
