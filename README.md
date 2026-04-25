@@ -13,6 +13,17 @@ A custom Blender addon for exporting and importing scenes in glTF 2.0 format.
 - **GPU Instancing** — collection instances via `EXT_mesh_gpu_instancing`
 - **Export formats** — GLB (binary), glTF + .bin (separate), glTF embedded (base64)
 
+## Supported glTF Extensions
+
+| Extension | Description |
+|-----------|-------------|
+| `KHR_lights_punctual` | Point, directional, and spot lights |
+| `KHR_node_visibility` | Per-node visibility |
+| `KHR_animation_pointer` | Material property animations |
+| `KHR_physics_rigid_bodies` | Rigid bodies, colliders, and joints |
+| `KHR_implicit_shapes` | Collision shapes for physics |
+| `EXT_mesh_gpu_instancing` | Efficient GPU instancing for repeated objects |
+
 ## Requirements
 
 - Blender 4.2.0 or newer
