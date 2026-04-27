@@ -261,6 +261,12 @@ class SceneExporter:
                     node.extensions = {}
                 node.extensions.update(physics_ext)
 
+        # Custom properties as extras
+        if self.settings.export_extras:
+            extras = self._gather_extras(obj)
+            if extras:
+                node.extras = extras
+
         index = len(self.nodes)
         self.nodes.append(node)
         self.object_to_node_index[obj.name] = index
@@ -283,6 +289,52 @@ class SceneExporter:
                 if gltf_idx is not None:
                     material_map[i] = gltf_idx
         return material_map
+
+    # --- Custom properties as extras ---
+
+    _SKIP_KEYS = frozenset({
+        "khr_physics", "cycles", "gltf_export_settings", "gltf_props",
+    })
+
+    @classmethod
+    def _gather_extras(cls, obj: "bpy.types.Object") -> dict | None:
+        """Collect custom properties from a Blender object as a JSON-serializable dict."""
+        extras: dict = {}
+        for key in obj.keys():
+            if key.startswith("_") or key in cls._SKIP_KEYS:
+                continue
+            value = obj[key]
+            converted = cls._convert_id_property(value)
+            if converted is not None:
+                extras[key] = converted
+        return extras if extras else None
+
+    @classmethod
+    def _convert_id_property(cls, value) -> object:
+        """Convert a Blender IDProperty value to a JSON-serializable Python type."""
+        # Try importing IDPropertyArray for isinstance check
+        try:
+            from idprop.types import IDPropertyArray, IDPropertyGroup
+        except ImportError:
+            IDPropertyArray = None
+            IDPropertyGroup = None
+
+        if isinstance(value, (int, float, str, bool)):
+            return value
+        if isinstance(value, list):
+            return [cls._convert_id_property(v) for v in value]
+        if IDPropertyArray is not None and isinstance(value, IDPropertyArray):
+            return [cls._convert_id_property(v) for v in value]
+        if IDPropertyGroup is not None and isinstance(value, IDPropertyGroup):
+            return {k: cls._convert_id_property(v) for k, v in value.items()}
+        if isinstance(value, dict):
+            return {k: cls._convert_id_property(v) for k, v in value.items()}
+        # Fallback: try to convert to float/int
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+        return None
 
     def _gather_camera(self, obj: "bpy.types.Object") -> int | None:
         """Convert a Blender camera to a glTF Camera. Returns camera index."""

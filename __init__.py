@@ -29,8 +29,8 @@ from .import_ import (
 
 if _needs_reload:
     import importlib
-    operator = importlib.reload(operator)
     exporter = importlib.reload(exporter)
+    operator = importlib.reload(operator)
     constants = importlib.reload(constants)
     types = importlib.reload(types)
     buffer = importlib.reload(buffer)

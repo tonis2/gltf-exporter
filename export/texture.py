@@ -11,6 +11,9 @@ if TYPE_CHECKING:
     from ..exporter import ExportSettings
 
 
+EXT_TEXTURE_TRANSFORM = "KHR_texture_transform"
+
+
 class TextureExporter:
     def __init__(self, buffer: BufferBuilder, settings: "ExportSettings") -> None:
         self.buffer = buffer
@@ -20,6 +23,7 @@ class TextureExporter:
         self.samplers: list[Sampler] = []
         self._image_cache: dict[str, int] = {}  # blender image name -> image index
         self._sampler_cache: dict[tuple, int] = {}
+        self.extensions_used: set[str] = set()
 
     def gather_texture_info(
         self,
@@ -31,10 +35,62 @@ class TextureExporter:
             return None
 
         texture_index = self._gather_texture(image_node)
+        extensions = self._gather_texture_transform(image_node)
         return TextureInfo(
             index=texture_index,
             tex_coord=tex_coord if tex_coord > 0 else None,
+            extensions=extensions,
         )
+
+    def _gather_texture_transform(
+        self, image_node: "bpy.types.ShaderNodeTexImage",
+    ) -> dict | None:
+        """Check for a Mapping node and return KHR_texture_transform extension dict."""
+        vector_input = image_node.inputs.get("Vector")
+        if vector_input is None or not vector_input.is_linked:
+            return None
+
+        linked_node = vector_input.links[0].from_node
+        if linked_node.type != "MAPPING":
+            return None
+
+        loc = linked_node.inputs["Location"].default_value
+        rot = linked_node.inputs["Rotation"].default_value
+        scale = linked_node.inputs["Scale"].default_value
+
+        offset_x = float(loc[0])
+        offset_y = float(loc[1])
+        rotation = float(rot[2])  # Z-axis rotation in radians
+        scale_x = float(scale[0])
+        scale_y = float(scale[1])
+
+        # Convert Blender UV space to glTF UV space (V is flipped)
+        # offset_y_gltf = 1 - scale_y - offset_y_blender
+        # rotation_gltf = -rotation_blender
+        gltf_offset_x = offset_x
+        gltf_offset_y = 1.0 - scale_y - offset_y
+        gltf_rotation = -rotation
+        gltf_scale_x = scale_x
+        gltf_scale_y = scale_y
+
+        # Only emit non-default values
+        is_default_offset = abs(gltf_offset_x) < 1e-6 and abs(gltf_offset_y) < 1e-6
+        is_default_rotation = abs(gltf_rotation) < 1e-6
+        is_default_scale = abs(gltf_scale_x - 1.0) < 1e-6 and abs(gltf_scale_y - 1.0) < 1e-6
+
+        if is_default_offset and is_default_rotation and is_default_scale:
+            return None
+
+        transform: dict = {}
+        if not is_default_offset:
+            transform["offset"] = [gltf_offset_x, gltf_offset_y]
+        if not is_default_rotation:
+            transform["rotation"] = gltf_rotation
+        if not is_default_scale:
+            transform["scale"] = [gltf_scale_x, gltf_scale_y]
+
+        self.extensions_used.add(EXT_TEXTURE_TRANSFORM)
+        return {EXT_TEXTURE_TRANSFORM: transform}
 
     def _gather_texture(self, image_node: "bpy.types.ShaderNodeTexImage") -> int:
         sampler_index = self._gather_sampler(image_node)

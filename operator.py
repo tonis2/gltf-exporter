@@ -51,6 +51,35 @@ class KHR_PhysicsProperties(bpy.types.PropertyGroup):
     )
 
 
+class GltfMaterialProperties(bpy.types.PropertyGroup):
+    """glTF material extension properties."""
+
+    unlit: BoolProperty(
+        name="Unlit",
+        description="Export as KHR_materials_unlit (no lighting applied)",
+        default=False,
+    )
+
+
+class MATERIAL_PT_gltf_properties(bpy.types.Panel):
+    """Panel in material properties for glTF extension settings."""
+    bl_label = "glTF Extensions"
+    bl_idname = "MATERIAL_PT_gltf_properties"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "material"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object is not None and context.active_object.active_material is not None
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.active_object.active_material.gltf_props
+        layout.prop(props, "unlit")
+
+
 class PHYSICS_PT_khr_physics(bpy.types.Panel):
     """Panel in the physics properties for KHR physics extension settings."""
     bl_label = "KHR Physics Extensions"
@@ -97,6 +126,7 @@ _EXPORT_PROPS = (
     "export_gpu_instancing",
     "export_skinning",
     "export_physics",
+    "export_extras",
     "export_only_visible",
     "export_all_scenes",
     "image_format",
@@ -124,6 +154,7 @@ class GltfExportSceneSettings(bpy.types.PropertyGroup):
     export_gpu_instancing: BoolProperty(name="GPU Instancing", default=True)
     export_skinning: BoolProperty(name="Skinning", default=True)
     export_physics: BoolProperty(name="Physics", default=True)
+    export_extras: BoolProperty(name="Custom Properties", default=True)
     export_only_visible: BoolProperty(name="Only Visible", default=False)
     export_all_scenes: BoolProperty(name="All Scenes", default=False)
     image_format: EnumProperty(
@@ -214,6 +245,12 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
         default=True,
     )
 
+    export_extras: BoolProperty(
+        name="Custom Properties",
+        description="Export object custom properties as glTF node extras",
+        default=True,
+    )
+
     export_only_visible: BoolProperty(
         name="Only Visible",
         description="Only export objects that are visible in the viewport",
@@ -262,6 +299,7 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
             export_gpu_instancing=self.export_gpu_instancing,
             export_skinning=self.export_skinning,
             export_physics=self.export_physics,
+            export_extras=self.export_extras,
             export_only_visible=self.export_only_visible,
             export_all_scenes=self.export_all_scenes,
             image_format=self.image_format,
@@ -319,6 +357,11 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
         header.label(text="Physics")
         if body:
             body.prop(self, "export_physics")
+
+        header, body = layout.panel("GLTF_export_extras", default_closed=True)
+        header.label(text="Extras")
+        if body:
+            body.prop(self, "export_extras")
 
     def check(self, context):
         # Update file extension based on format
@@ -465,6 +508,9 @@ def menu_func_import(self, context):
 
 
 def register():
+    bpy.utils.register_class(GltfMaterialProperties)
+    bpy.types.Material.gltf_props = bpy.props.PointerProperty(type=GltfMaterialProperties)
+    bpy.utils.register_class(MATERIAL_PT_gltf_properties)
     bpy.utils.register_class(KHR_PhysicsProperties)
     bpy.types.Object.khr_physics = bpy.props.PointerProperty(type=KHR_PhysicsProperties)
     bpy.utils.register_class(PHYSICS_PT_khr_physics)
@@ -486,3 +532,6 @@ def unregister():
     bpy.utils.unregister_class(PHYSICS_PT_khr_physics)
     del bpy.types.Object.khr_physics
     bpy.utils.unregister_class(KHR_PhysicsProperties)
+    bpy.utils.unregister_class(MATERIAL_PT_gltf_properties)
+    del bpy.types.Material.gltf_props
+    bpy.utils.unregister_class(GltfMaterialProperties)

@@ -10,12 +10,16 @@ if TYPE_CHECKING:
     from ..exporter import ExportSettings
 
 
+EXT_MATERIALS_UNLIT = "KHR_materials_unlit"
+
+
 class MaterialExporter:
     def __init__(self, texture_exporter: TextureExporter, settings: "ExportSettings") -> None:
         self.texture_exporter = texture_exporter
         self.settings = settings
         self.materials: list[Material] = []
         self._cache: dict[str, int] = {}
+        self.extensions_used: set[str] = set()
 
     def gather(self, blender_material: "bpy.types.Material") -> int | None:
         """Export a Blender material. Returns material index or None."""
@@ -51,6 +55,13 @@ class MaterialExporter:
         if blender_material.use_backface_culling is False:
             double_sided = True
 
+        # KHR_materials_unlit
+        extensions = None
+        gltf_props = getattr(blender_material, "gltf_props", None)
+        if gltf_props and gltf_props.unlit:
+            extensions = {EXT_MATERIALS_UNLIT: {}}
+            self.extensions_used.add(EXT_MATERIALS_UNLIT)
+
         return Material(
             name=blender_material.name,
             pbr_metallic_roughness=pbr,
@@ -60,6 +71,7 @@ class MaterialExporter:
             alpha_mode=alpha_mode,
             alpha_cutoff=alpha_cutoff,
             double_sided=double_sided,
+            extensions=extensions,
         )
 
     def _find_principled_bsdf(
@@ -165,6 +177,7 @@ class MaterialExporter:
             index=tex_info.index,
             tex_coord=tex_info.tex_coord,
             scale=scale,
+            extensions=tex_info.extensions,
         )
 
     def _gather_emission(

@@ -195,6 +195,11 @@ class SceneImporter:
             gltf_mesh = self.gltf.meshes[node.mesh]
             self.mesh_importer.apply_morph_targets(obj, node.mesh, gltf_mesh)
 
+        # Custom properties from extras
+        if node.extras and isinstance(node.extras, dict):
+            for key, value in node.extras.items():
+                obj[key] = value
+
         # Physics (rigid body / collider)
         if self.physics_importer and self.settings.import_physics:
             self.physics_importer.import_node(context, obj, node, node_index)

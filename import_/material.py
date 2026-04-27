@@ -79,6 +79,17 @@ class MaterialImporter:
         else:
             mat.use_backface_culling = True
 
+        # KHR_materials_unlit
+        if gltf_mat.extensions and "KHR_materials_unlit" in gltf_mat.extensions:
+            gltf_props = getattr(mat, "gltf_props", None)
+            if gltf_props:
+                gltf_props.unlit = True
+            # Make it look unlit in viewport
+            principled.inputs["Metallic"].default_value = 0.0
+            principled.inputs["Roughness"].default_value = 1.0
+            if "Specular IOR Level" in principled.inputs:
+                principled.inputs["Specular IOR Level"].default_value = 0.0
+
         return mat
 
     def _apply_pbr(self, tree, principled, pbr) -> None:
@@ -128,6 +139,8 @@ class MaterialImporter:
             else:
                 tex_node.extension = "REPEAT"
 
+        self._apply_texture_transform(tree, tex_node, texture_info)
+
         tree.links.new(tex_node.outputs["Color"], principled.inputs[socket_name])
 
     def _apply_normal_texture(self, tree, principled, normal_info) -> None:
@@ -154,5 +167,43 @@ class MaterialImporter:
         if normal_info.scale is not None:
             normal_map.inputs["Strength"].default_value = normal_info.scale
 
+        self._apply_texture_transform(tree, tex_node, normal_info)
+
         tree.links.new(tex_node.outputs["Color"], normal_map.inputs["Color"])
         tree.links.new(normal_map.outputs["Normal"], principled.inputs["Normal"])
+
+    def _apply_texture_transform(self, tree, tex_node, texture_info) -> None:
+        """Create Mapping + Texture Coordinate nodes for KHR_texture_transform."""
+        if not hasattr(texture_info, "extensions") or not texture_info.extensions:
+            return
+        transform = texture_info.extensions.get("KHR_texture_transform")
+        if transform is None:
+            return
+
+        offset = transform.get("offset", [0.0, 0.0])
+        rotation = transform.get("rotation", 0.0)
+        scale = transform.get("scale", [1.0, 1.0])
+
+        # Convert glTF UV space back to Blender UV space (V is flipped)
+        # offset_y_blender = 1 - scale_y_gltf - offset_y_gltf
+        # rotation_blender = -rotation_gltf
+        bl_offset_x = offset[0]
+        bl_offset_y = 1.0 - scale[1] - offset[1]
+        bl_rotation = -rotation
+        bl_scale_x = scale[0]
+        bl_scale_y = scale[1]
+
+        tex_x = tex_node.location[0]
+        tex_y = tex_node.location[1]
+
+        mapping = tree.nodes.new("ShaderNodeMapping")
+        mapping.location = (tex_x - 200, tex_y)
+        mapping.inputs["Location"].default_value = (bl_offset_x, bl_offset_y, 0.0)
+        mapping.inputs["Rotation"].default_value = (0.0, 0.0, bl_rotation)
+        mapping.inputs["Scale"].default_value = (bl_scale_x, bl_scale_y, 1.0)
+
+        tex_coord = tree.nodes.new("ShaderNodeTexCoord")
+        tex_coord.location = (tex_x - 400, tex_y)
+
+        tree.links.new(tex_coord.outputs["UV"], mapping.inputs["Vector"])
+        tree.links.new(mapping.outputs["Vector"], tex_node.inputs["Vector"])

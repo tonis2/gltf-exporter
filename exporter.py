@@ -32,6 +32,7 @@ class ExportSettings:
     export_gpu_instancing: bool = True
     export_skinning: bool = True
     export_physics: bool = True
+    export_extras: bool = True
     export_only_visible: bool = False
     export_all_scenes: bool = False
     image_format: str = "AUTO"  # "AUTO", "JPEG", or "PNG"
@@ -94,6 +95,8 @@ class GltfExporter:
 
         # 5. Collect extensions used
         all_extensions = set(self.scene_exporter.extensions_used)
+        all_extensions |= self.material_exporter.extensions_used
+        all_extensions |= self.texture_exporter.extensions_used
         if animation_exporter:
             all_extensions |= animation_exporter.extensions_used
         if self.physics_exporter:
