@@ -17,6 +17,7 @@ from .material import MaterialExporter
 from .skin import SkinExporter
 from .physics import PhysicsExporter
 from .particles import ParticleExporter
+from .interactivity import InteractivityExporter
 
 if TYPE_CHECKING:
     import bpy
@@ -45,6 +46,7 @@ class SceneExporter:
         skin_exporter: SkinExporter | None = None,
         physics_exporter: PhysicsExporter | None = None,
         particle_exporter: ParticleExporter | None = None,
+        interactivity_exporter: InteractivityExporter | None = None,
     ) -> None:
         self.mesh_exporter = mesh_exporter
         self.material_exporter = material_exporter
@@ -53,6 +55,7 @@ class SceneExporter:
         self.skin_exporter = skin_exporter
         self.physics_exporter = physics_exporter
         self.particle_exporter = particle_exporter
+        self.interactivity_exporter = interactivity_exporter
         self._fps: float = 24.0
         self.nodes: list[Node] = []
         self.object_to_node_index: dict[str, int] = {}
@@ -276,6 +279,14 @@ class SceneExporter:
                 if node.extensions is None:
                     node.extensions = {}
                 node.extensions.update(particle_ext)
+
+        # KHR_interactivity behavior graph
+        if self.interactivity_exporter:
+            interactivity_ext = self.interactivity_exporter.gather_node(obj)
+            if interactivity_ext:
+                if node.extensions is None:
+                    node.extensions = {}
+                node.extensions.update(interactivity_ext)
 
         # Custom properties as extras
         if self.settings.export_extras:

@@ -11,6 +11,10 @@ if TYPE_CHECKING:
 
 
 EXT_MATERIALS_UNLIT = "KHR_materials_unlit"
+EXT_MATERIALS_LAYERS = "CUSTOM_materials_layers"
+LAYER_NODE_GROUP_NAME = "glTF Material Layer"
+_VALID_BLEND_MODES = {"MIX", "ADD", "MULTIPLY"}
+_VALID_MASK_CHANNELS = {"R", "G", "B", "A"}
 
 
 class MaterialExporter:
@@ -61,6 +65,14 @@ class MaterialExporter:
         if gltf_props and gltf_props.unlit:
             extensions = {EXT_MATERIALS_UNLIT: {}}
             self.extensions_used.add(EXT_MATERIALS_UNLIT)
+
+        # CUSTOM_materials_layers
+        layers = self._gather_layers(blender_material)
+        if layers:
+            if extensions is None:
+                extensions = {}
+            extensions[EXT_MATERIALS_LAYERS] = {"layers": layers}
+            self.extensions_used.add(EXT_MATERIALS_LAYERS)
 
         return Material(
             name=blender_material.name,
@@ -117,16 +129,10 @@ class MaterialExporter:
     def _gather_pbr(
         self, principled: "bpy.types.ShaderNodeBsdfPrincipled"
     ) -> MaterialPBRMetallicRoughness:
-        # Base color
-        base_color = self._get_socket_default(principled, "Base Color")
-        base_color_factor = None
-        if base_color is not None:
-            base_color_factor = [base_color[0], base_color[1], base_color[2], base_color[3]]
-
-        base_color_texture = None
-        image_node = self._get_connected_image_node(principled, "Base Color")
-        if image_node:
-            base_color_texture = self.texture_exporter.gather_texture_info(image_node)
+        # Base color — if Principled.Base Color is fed by a layer chain,
+        # the base material's color comes from the deepest layer's "Below Color".
+        base_color_socket = self._resolve_base_color_socket(principled)
+        base_color_factor, base_color_texture = self._read_color_socket(base_color_socket)
 
         # Metallic
         metallic = self._get_socket_default(principled, "Metallic")
@@ -226,3 +232,257 @@ class MaterialExporter:
             return "MASK", cutoff
 
         return "BLEND", None
+
+    def _gather_layers(
+        self, blender_material: "bpy.types.Material",
+    ) -> list[dict] | None:
+        """Walk the layer chain from the Principled BSDF's Base Color back."""
+        principled = self._find_principled_bsdf(blender_material)
+        if principled is None:
+            return None
+        chain = self._collect_layer_chain(principled)
+        if not chain:
+            return None
+
+        layers: list[dict] = []
+        for node in chain:
+            layer = self._gather_one_layer(node)
+            if layer is not None:
+                layers.append(layer)
+        return layers or None
+
+    def _is_layer_node(self, node) -> bool:
+        return (
+            getattr(node, "type", None) == "GROUP"
+            and getattr(node, "node_tree", None) is not None
+            and node.node_tree.name == LAYER_NODE_GROUP_NAME
+        )
+
+    def _resolve_base_color_socket(self, principled):
+        """Walk through any layer chain on Principled.Base Color and return the
+        socket that feeds the base material's color (deepest 'Below Color', or
+        the Principled socket itself if there is no chain).
+        """
+        socket = principled.inputs.get("Base Color")
+        seen: set[int] = set()
+        while socket is not None and socket.is_linked:
+            upstream = socket.links[0].from_node
+            if id(upstream) in seen:
+                break
+            seen.add(id(upstream))
+            if not self._is_layer_node(upstream):
+                break
+            below = upstream.inputs.get("Below Color")
+            if below is None:
+                break
+            socket = below
+        return socket
+
+    def _image_node_from_socket(self, socket):
+        """Like _get_connected_image_node but takes a socket directly."""
+        if socket is None or not socket.is_linked:
+            return None
+        linked = socket.links[0].from_node
+        if linked.type == "TEX_IMAGE":
+            return linked
+        if linked.type == "NORMAL_MAP":
+            color_socket = linked.inputs.get("Color")
+            if color_socket and color_socket.is_linked:
+                inner = color_socket.links[0].from_node
+                if inner.type == "TEX_IMAGE":
+                    return inner
+        return None
+
+    def _read_color_socket(self, socket):
+        """Resolve a color socket to (factor, TextureInfo).
+
+        Handles the common upstream cases: Image Texture (texture wins, factor
+        is the socket's local default), RGB node (read its output value as the
+        factor), or unlinked (read socket default).
+        """
+        if socket is None:
+            return None, None
+
+        image_node = self._image_node_from_socket(socket)
+        if image_node is not None:
+            v = socket.default_value
+            tex_info = self.texture_exporter.gather_texture_info(image_node)
+            return [v[0], v[1], v[2], v[3]], tex_info
+
+        if socket.is_linked:
+            from_socket = socket.links[0].from_socket
+            v = getattr(from_socket, "default_value", None)
+            if v is not None and hasattr(v, "__len__") and len(v) >= 3:
+                a = v[3] if len(v) >= 4 else 1.0
+                return [v[0], v[1], v[2], a], None
+
+        v = socket.default_value
+        return [v[0], v[1], v[2], v[3]], None
+
+    def _collect_layer_chain(self, principled) -> list:
+        """Walk Principled.Base Color → ML.Color → ML.Below Color → ML.Color → …
+        Returns layers in BASE→TOP order.
+        """
+        chain: list = []
+        socket = principled.inputs.get("Base Color")
+        seen: set[int] = set()
+        while socket is not None and socket.is_linked:
+            upstream = socket.links[0].from_node
+            if id(upstream) in seen:
+                break
+            seen.add(id(upstream))
+            if not self._is_layer_node(upstream):
+                break
+            chain.append(upstream)
+            below = upstream.inputs.get("Below Color")
+            if below is None:
+                break
+            socket = below
+        return list(reversed(chain))
+
+    def _gather_one_layer(self, group_node) -> dict | None:
+        layer: dict = {}
+
+        if group_node.label:
+            layer["name"] = group_node.label
+
+        pbr: dict = {}
+
+        # Base color (this layer's color)
+        bc = self._get_socket_default(group_node, "Color")
+        if bc is not None:
+            r, g, b, a = float(bc[0]), float(bc[1]), float(bc[2]), float(bc[3])
+            if (r, g, b, a) != (1.0, 1.0, 1.0, 1.0):
+                pbr["baseColorFactor"] = [r, g, b, a]
+        bc_node = self._get_connected_image_node(group_node, "Color")
+        if bc_node:
+            ti = self.texture_exporter.gather_texture_info(bc_node)
+            if ti is not None:
+                pbr["baseColorTexture"] = ti
+
+        # Metallic / roughness
+        m = self._get_socket_default(group_node, "Metallic")
+        if m is not None and float(m) != 1.0:
+            pbr["metallicFactor"] = float(m)
+        r = self._get_socket_default(group_node, "Roughness")
+        if r is not None and float(r) != 1.0:
+            pbr["roughnessFactor"] = float(r)
+
+        mr_node = self._get_connected_image_node(group_node, "Metallic")
+        if mr_node is None:
+            mr_node = self._get_connected_image_node(group_node, "Roughness")
+        if mr_node:
+            ti = self.texture_exporter.gather_texture_info(mr_node)
+            if ti is not None:
+                pbr["metallicRoughnessTexture"] = ti
+
+        if pbr:
+            layer["pbrMetallicRoughness"] = pbr
+
+        # Normal
+        n_node = self._get_connected_image_node(group_node, "Normal")
+        if n_node is not None:
+            ti = self.texture_exporter.gather_texture_info(n_node)
+            if ti is not None:
+                normal: dict = {"index": ti.index}
+                if ti.tex_coord is not None:
+                    normal["texCoord"] = ti.tex_coord
+                if ti.extensions:
+                    normal["extensions"] = ti.extensions
+                layer["normalTexture"] = normal
+
+        # Mask (required)
+        mask = self._gather_layer_mask(group_node)
+        if mask is None:
+            return None  # layers without a mask have no meaning
+        layer["mask"] = mask
+
+        # Blend mode (optional, custom property on the group node)
+        blend = group_node.get("blend_mode")
+        if blend:
+            blend = str(blend).upper()
+            if blend in _VALID_BLEND_MODES and blend != "MIX":
+                layer["blendMode"] = blend
+
+        return layer
+
+    def _gather_layer_mask(self, group_node) -> dict | None:
+        socket = group_node.inputs.get("Mask")
+        if socket is None or not socket.is_linked:
+            return None
+
+        link = socket.links[0]
+        src = link.from_node
+        from_socket_name = link.from_socket.name
+
+        if src.type == "TEX_IMAGE":
+            ti = self.texture_exporter.gather_texture_info(src)
+            if ti is None:
+                return None
+            tex: dict = {"index": ti.index}
+            if ti.tex_coord is not None:
+                tex["texCoord"] = ti.tex_coord
+            if ti.extensions:
+                tex["extensions"] = ti.extensions
+            mask = {"source": "TEXTURE", "texture": tex}
+            channel = "A" if from_socket_name == "Alpha" else "R"
+            if channel != "R":
+                mask["channel"] = channel
+            return mask
+
+        # Separate Color/RGB driven by an image — write the channel
+        if src.type in ("SEPARATE_COLOR", "SEPRGB"):
+            channel = _socket_to_channel(from_socket_name)
+            color_in = src.inputs.get("Color") or src.inputs.get("Image")
+            if color_in is not None and color_in.is_linked:
+                inner = color_in.links[0].from_node
+                if inner.type == "TEX_IMAGE":
+                    ti = self.texture_exporter.gather_texture_info(inner)
+                    if ti is None:
+                        return None
+                    tex = {"index": ti.index}
+                    if ti.tex_coord is not None:
+                        tex["texCoord"] = ti.tex_coord
+                    if ti.extensions:
+                        tex["extensions"] = ti.extensions
+                    mask = {"source": "TEXTURE", "texture": tex}
+                    if channel != "R":
+                        mask["channel"] = channel
+                    return mask
+                if inner.type in ("VERTEX_COLOR", "ATTRIBUTE"):
+                    return _vertex_color_mask(inner, channel)
+
+        if src.type in ("VERTEX_COLOR", "ATTRIBUTE"):
+            channel = "A" if from_socket_name == "Alpha" else "R"
+            return _vertex_color_mask(src, channel)
+
+        return None
+
+
+def _socket_to_channel(name: str) -> str:
+    name = name.upper()
+    if name in _VALID_MASK_CHANNELS:
+        return name
+    if name == "RED":
+        return "R"
+    if name == "GREEN":
+        return "G"
+    if name == "BLUE":
+        return "B"
+    if name == "ALPHA":
+        return "A"
+    return "R"
+
+
+def _vertex_color_mask(src, channel: str) -> dict:
+    attr = ""
+    if src.type == "VERTEX_COLOR":
+        attr = getattr(src, "layer_name", "") or ""
+    else:
+        attr = getattr(src, "attribute_name", "") or ""
+    mask = {"source": "VERTEX_COLOR"}
+    if attr and attr != "COLOR_0":
+        mask["attribute"] = attr
+    if channel != "R":
+        mask["channel"] = channel
+    return mask

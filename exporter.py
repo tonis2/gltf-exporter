@@ -15,6 +15,7 @@ from .export.scene import SceneExporter
 from .export.skin import SkinExporter
 from .export.physics import PhysicsExporter
 from .export.particles import ParticleExporter
+from .export.interactivity import InteractivityExporter
 
 if TYPE_CHECKING:
     import bpy
@@ -35,6 +36,7 @@ class ExportSettings:
     export_physics: bool = True
     export_extras: bool = True
     export_particles: bool = True
+    export_interactivity: bool = True
     export_only_visible: bool = False
     export_all_scenes: bool = False
     export_camera_y_up: bool = True
@@ -54,12 +56,19 @@ class GltfExporter:
         self.particle_exporter = ParticleExporter(
             settings, self.mesh_exporter, self.material_exporter,
         ) if settings.export_particles else None
+        self.interactivity_exporter = InteractivityExporter(
+            settings,
+        ) if settings.export_interactivity else None
         self.scene_exporter = SceneExporter(
             self.mesh_exporter, self.material_exporter, self.buffer, settings,
             skin_exporter=self.skin_exporter,
             physics_exporter=self.physics_exporter,
             particle_exporter=self.particle_exporter,
+            interactivity_exporter=self.interactivity_exporter,
         )
+        if self.interactivity_exporter is not None:
+            self.interactivity_exporter.scene_exporter = self.scene_exporter
+            self.interactivity_exporter.material_exporter = self.material_exporter
 
     def export(self) -> None:
         # 1. Gather scene data
@@ -110,6 +119,8 @@ class GltfExporter:
             all_extensions |= self.physics_exporter.extensions_used
         if self.particle_exporter:
             all_extensions |= self.particle_exporter.extensions_used
+        if self.interactivity_exporter:
+            all_extensions |= self.interactivity_exporter.extensions_used
         extensions_used = sorted(all_extensions) or None
 
         # 5b. Collect root-level extensions
@@ -124,6 +135,14 @@ class GltfExporter:
             root_extensions["KHR_lights_punctual"] = {
                 "lights": self.scene_exporter.lights,
             }
+
+        # 5d. KHR_interactivity root extension
+        if self.interactivity_exporter:
+            interactivity_root = self.interactivity_exporter.get_root_extension()
+            if interactivity_root:
+                if root_extensions is None:
+                    root_extensions = {}
+                root_extensions.update(interactivity_root)
 
         # 6. Assemble glTF
         gltf = Gltf(

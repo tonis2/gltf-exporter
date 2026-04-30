@@ -128,6 +128,7 @@ _EXPORT_PROPS = (
     "export_physics",
     "export_extras",
     "export_particles",
+    "export_interactivity",
     "export_only_visible",
     "export_all_scenes",
     "export_camera_y_up",
@@ -158,6 +159,7 @@ class GltfExportSceneSettings(bpy.types.PropertyGroup):
     export_physics: BoolProperty(name="Physics", default=True)
     export_extras: BoolProperty(name="Custom Properties", default=True)
     export_particles: BoolProperty(name="Particles", default=True)
+    export_interactivity: BoolProperty(name="Interactivity", default=True)
     export_only_visible: BoolProperty(name="Only Visible", default=False)
     export_all_scenes: BoolProperty(name="All Scenes", default=False)
     export_camera_y_up: BoolProperty(name="Cameras Y-Up", default=True)
@@ -261,6 +263,12 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
         default=True,
     )
 
+    export_interactivity: BoolProperty(
+        name="Interactivity",
+        description="Export per-object behavior graphs as KHR_interactivity",
+        default=True,
+    )
+
     export_only_visible: BoolProperty(
         name="Only Visible",
         description="Only export objects that are visible in the viewport",
@@ -321,6 +329,7 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
             export_physics=self.export_physics,
             export_extras=self.export_extras,
             export_particles=self.export_particles,
+            export_interactivity=self.export_interactivity,
             export_only_visible=self.export_only_visible,
             export_all_scenes=self.export_all_scenes,
             export_camera_y_up=self.export_camera_y_up,
@@ -389,6 +398,11 @@ class EXPORT_SCENE_OT_gltf(bpy.types.Operator, ExportHelper):
         header.label(text="Particles")
         if body:
             body.prop(self, "export_particles")
+
+        header, body = layout.panel("GLTF_export_interactivity", default_closed=True)
+        header.label(text="Interactivity")
+        if body:
+            body.prop(self, "export_interactivity")
 
         header, body = layout.panel("GLTF_export_extras", default_closed=True)
         header.label(text="Extras")
@@ -480,6 +494,12 @@ class IMPORT_SCENE_OT_gltf(bpy.types.Operator, ImportHelper):
         default=True,
     )
 
+    import_interactivity: BoolProperty(
+        name="Interactivity",
+        description="Import KHR_interactivity behavior graphs as Blender node trees",
+        default=True,
+    )
+
     def execute(self, context):
         settings = ImportSettings(
             filepath=self.filepath,
@@ -492,6 +512,7 @@ class IMPORT_SCENE_OT_gltf(bpy.types.Operator, ImportHelper):
             import_skinning=self.import_skinning,
             import_physics=self.import_physics,
             import_particles=self.import_particles,
+            import_interactivity=self.import_interactivity,
         )
 
         try:
@@ -541,6 +562,11 @@ class IMPORT_SCENE_OT_gltf(bpy.types.Operator, ImportHelper):
         header.label(text="Particles")
         if body:
             body.prop(self, "import_particles")
+
+        header, body = layout.panel("GLTF_import_interactivity", default_closed=True)
+        header.label(text="Interactivity")
+        if body:
+            body.prop(self, "import_interactivity")
 
 
 def menu_func_export(self, context):

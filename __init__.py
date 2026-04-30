@@ -13,8 +13,10 @@ _needs_reload = "operator" in locals()
 from . import operator
 from . import exporter
 from . import importer
+from . import material_layer_nodes
+from . import interactivity_nodes
 from .gltf import constants, types, buffer, serialize
-from .export import converter, mesh, material, texture, scene, animation, skin, physics, particles
+from .export import converter, mesh, material, texture, scene, animation, skin, physics, particles, interactivity
 from .import_ import (
     converter as import_converter,
     buffer_reader,
@@ -26,12 +28,15 @@ from .import_ import (
     skin as import_skin,
     physics as import_physics,
     particles as import_particles,
+    interactivity as import_interactivity,
 )
 
 if _needs_reload:
     import importlib
     exporter = importlib.reload(exporter)
     operator = importlib.reload(operator)
+    material_layer_nodes = importlib.reload(material_layer_nodes)
+    interactivity_nodes = importlib.reload(interactivity_nodes)
     constants = importlib.reload(constants)
     types = importlib.reload(types)
     buffer = importlib.reload(buffer)
@@ -45,6 +50,7 @@ if _needs_reload:
     skin = importlib.reload(skin)
     physics = importlib.reload(physics)
     particles = importlib.reload(particles)
+    interactivity = importlib.reload(interactivity)
     importer = importlib.reload(importer)
     import_converter = importlib.reload(import_converter)
     buffer_reader = importlib.reload(buffer_reader)
@@ -56,11 +62,16 @@ if _needs_reload:
     import_skin = importlib.reload(import_skin)
     import_physics = importlib.reload(import_physics)
     import_particles = importlib.reload(import_particles)
+    import_interactivity = importlib.reload(import_interactivity)
 
 
 def register():
     operator.register()
+    material_layer_nodes.register()
+    interactivity_nodes.register()
 
 
 def unregister():
+    interactivity_nodes.unregister()
+    material_layer_nodes.unregister()
     operator.unregister()

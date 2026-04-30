@@ -15,6 +15,7 @@ from .import_.scene import SceneImporter
 from .import_.animation import AnimationImporter
 from .import_.physics import PhysicsImporter
 from .import_.particles import ParticleImporter
+from .import_.interactivity import InteractivityImporter
 
 if TYPE_CHECKING:
     import bpy
@@ -32,6 +33,7 @@ class ImportSettings:
     import_skinning: bool = True
     import_physics: bool = True
     import_particles: bool = True
+    import_interactivity: bool = True
 
 
 class GltfImporter:
@@ -87,18 +89,30 @@ class GltfImporter:
             if not particle_importer.has_particles():
                 particle_importer = None
 
+        # 7d. Prepare interactivity importer
+        interactivity_importer = None
+        if self.settings.import_interactivity:
+            interactivity_importer = InteractivityImporter(gltf, self.settings)
+            if not interactivity_importer.has_interactivity():
+                interactivity_importer = None
+
         # 8. Import scene hierarchy (creates armatures for skinned meshes)
         scene_importer = SceneImporter(
             gltf, buffer_reader, mesh_importer, self.settings,
             skin_importer=skin_importer,
             physics_importer=physics_importer,
             particle_importer=particle_importer,
+            interactivity_importer=interactivity_importer,
         )
         node_to_blender = scene_importer.import_scene(self.context)
 
         # 8b. Physics joint fixup (needs node mapping)
         if physics_importer:
             physics_importer.fixup_joints(self.context, node_to_blender)
+
+        # 8c. Interactivity pointer fixup (needs node + material mapping)
+        if interactivity_importer:
+            interactivity_importer.fixup_pointers(node_to_blender, material_importer)
 
         # 9. Import animations
         if self.settings.import_animations:

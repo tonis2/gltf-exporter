@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .skin import SkinImporter
     from .physics import PhysicsImporter
     from .particles import ParticleImporter
+    from .interactivity import InteractivityImporter
     from ..importer import ImportSettings
 
 
@@ -28,6 +29,7 @@ class SceneImporter:
         skin_importer: "SkinImporter | None" = None,
         physics_importer: "PhysicsImporter | None" = None,
         particle_importer: "ParticleImporter | None" = None,
+        interactivity_importer: "InteractivityImporter | None" = None,
     ) -> None:
         self.gltf = gltf
         self.buffer_reader = buffer_reader
@@ -36,6 +38,7 @@ class SceneImporter:
         self.skin_importer = skin_importer
         self.physics_importer = physics_importer
         self.particle_importer = particle_importer
+        self.interactivity_importer = interactivity_importer
         self.node_to_blender: dict[int, "bpy.types.Object"] = {}
         self._skin_armatures: dict[int, "bpy.types.Object"] = {}
 
@@ -210,6 +213,10 @@ class SceneImporter:
         # Particle systems
         if self.particle_importer and self.settings.import_particles:
             self.particle_importer.import_node(context, obj, node)
+
+        # KHR_interactivity behavior graph
+        if self.interactivity_importer and self.settings.import_interactivity:
+            self.interactivity_importer.import_node(context, obj, node)
 
         # Recurse children
         if node.children:
