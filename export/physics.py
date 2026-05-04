@@ -271,8 +271,12 @@ class PhysicsExporter:
                 for i in range(3):
                     max_half[i] = max(max_half[i], abs(v.co[i]))
             size = convert_scale([max_half[0] * 2, max_half[1] * 2, max_half[2] * 2])
-            if any(s <= 0 for s in size):
+            if all(s <= 0 for s in size):
                 return None
+            # Degenerate axes (e.g., flat plane mesh) get a tiny floor so the
+            # collider stays a thin slab instead of being silently dropped.
+            min_thickness = 0.001
+            size = [max(s, min_thickness) for s in size]
             return {
                 "type": "box",
                 "box": {"size": [round(s, 6) for s in size]},
