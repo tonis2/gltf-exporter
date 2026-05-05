@@ -321,15 +321,11 @@ class MeshExporter:
             unique_dots["nx"], unique_dots["ny"], unique_dots["nz"],
         ])
 
-        # Choose index component type based on vertex count
-        num_verts = len(unique_dots)
-        if num_verts <= 255:
-            index_type = ComponentType.UNSIGNED_BYTE
-        elif num_verts <= 65535:
-            index_type = ComponentType.UNSIGNED_SHORT
-        else:
-            index_type = ComponentType.UNSIGNED_INT
-
+        # Default to UNSIGNED_INT (uint32) so consumers can concatenate primitives
+        # into a global vertex buffer without ushort wrap. Per-primitive ubyte/ushort
+        # would save space but break renderers that share index buffers across
+        # primitives (the tank_game project does this).
+        index_type = ComponentType.UNSIGNED_INT
         indices = remap_indices.astype(index_type.numpy_dtype)
 
         # Add to buffer

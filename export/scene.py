@@ -226,7 +226,11 @@ class SceneExporter:
         loc, rot, scale = obj.matrix_local.decompose()
 
         translation = convert_location(loc)
-        if obj.type == "CAMERA" and self.settings.export_camera_y_up:
+        if obj.type == "LIGHT" or (obj.type == "CAMERA" and self.settings.export_camera_y_up):
+            # Blender lights shine along local -Z (same as glTF KHR_lights_punctual).
+            # After the Z-up -> Y-up axis swap, that direction lands along glTF local
+            # +Y, so the same Rx(-90°) post-rotation we apply to cameras restores the
+            # glTF -Z forward convention for lights as well.
             rotation = convert_rotation_camera(rot)
         else:
             rotation = convert_rotation(rot)

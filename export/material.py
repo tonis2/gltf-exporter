@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 EXT_MATERIALS_UNLIT = "KHR_materials_unlit"
 EXT_MATERIALS_LAYERS = "CUSTOM_materials_layers"
 LAYER_NODE_GROUP_NAME = "glTF Material Layer"
+UCUPAINT_GROUP_PREFIX = "Ucupaint "
+UCUPAINT_LAYER_PREFIX = ".yP Layer "
 _VALID_BLEND_MODES = {"MIX", "ADD", "MULTIPLY"}
 _VALID_MASK_CHANNELS = {"R", "G", "B", "A"}
 
@@ -55,6 +57,11 @@ class MaterialExporter:
             normal_texture = self._gather_normal(principled)
             emissive_texture, emissive_factor = self._gather_emission(principled)
             alpha_mode, alpha_cutoff = self._gather_alpha(blender_material, principled)
+        else:
+            # No Principled BSDF: try to recover base color + alpha from a
+            # custom shader group plugged directly into Material Output.Surface
+            # (e.g. tree-leaf shaders).
+            pbr, alpha_mode, alpha_cutoff = self._gather_from_surface_group(blender_material)
 
         if blender_material.use_backface_culling is False:
             double_sided = True
@@ -107,23 +114,95 @@ class MaterialExporter:
     def _get_connected_image_node(
         self, node: "bpy.types.ShaderNode", socket_name: str
     ) -> "bpy.types.ShaderNodeTexImage | None":
-        """If a socket has a linked Image Texture node, return it."""
+        """Resolve `node.inputs[socket_name]` to an upstream Image Texture,
+        following pass-through nodes (Reroute, Normal Map, Group boundaries).
+        """
         socket = node.inputs.get(socket_name)
-        if socket is None or not socket.is_linked:
+        return self._walk_to_image(socket)
+
+    def _walk_to_image(
+        self, socket, _group_stack=None, _visited=None, _depth=0,
+    ) -> "bpy.types.ShaderNodeTexImage | None":
+        """Generic socket walker that returns the first Image Texture node
+        reachable upstream through Reroute / Normal Map / node-group I/O.
+        `_group_stack` tracks GROUP nodes we've descended into so we can hop
+        back out via GROUP_INPUT.
+        """
+        if socket is None or _depth > 16:
             return None
+        if not socket.is_linked:
+            return None
+        if _visited is None:
+            _visited = set()
 
-        linked_node = socket.links[0].from_node
-        if linked_node.type == "TEX_IMAGE":
-            return linked_node
+        link = socket.links[0]
+        upstream = link.from_node
+        from_socket = link.from_socket
+        key = (id(upstream), getattr(from_socket, "identifier", from_socket.name))
+        if key in _visited:
+            return None
+        _visited.add(key)
 
-        # Handle Normal Map node -> Image Texture
-        if linked_node.type == "NORMAL_MAP":
-            color_socket = linked_node.inputs.get("Color")
-            if color_socket and color_socket.is_linked:
-                inner_node = color_socket.links[0].from_node
-                if inner_node.type == "TEX_IMAGE":
-                    return inner_node
-
+        t = upstream.type
+        if t == "TEX_IMAGE":
+            return upstream
+        if t == "REROUTE":
+            return self._walk_to_image(
+                upstream.inputs[0] if upstream.inputs else None,
+                _group_stack, _visited, _depth + 1,
+            )
+        if t == "NORMAL_MAP":
+            return self._walk_to_image(
+                upstream.inputs.get("Color"),
+                _group_stack, _visited, _depth + 1,
+            )
+        if t == "GROUP":
+            tree = getattr(upstream, "node_tree", None)
+            if tree is None:
+                return None
+            gout = next((n for n in tree.nodes if n.type == "GROUP_OUTPUT"), None)
+            if gout is None:
+                return None
+            inner = gout.inputs.get(from_socket.name)
+            if inner is None:
+                # Fall back to matching by output index
+                for i, o in enumerate(upstream.outputs):
+                    if o is from_socket and i < len(gout.inputs):
+                        inner = gout.inputs[i]
+                        break
+            if inner is None:
+                return None
+            return self._walk_to_image(
+                inner, (_group_stack or ()) + (upstream,), _visited, _depth + 1,
+            )
+        if t == "GROUP_INPUT":
+            if not _group_stack:
+                return None
+            parent = _group_stack[-1]
+            parent_in = parent.inputs.get(from_socket.name)
+            if parent_in is None:
+                return None
+            return self._walk_to_image(
+                parent_in, _group_stack[:-1], _visited, _depth + 1,
+            )
+        if t in ("MIX", "MIX_RGB"):
+            # Best-effort: return whichever color input traces to an image.
+            # Skip the Factor/Mask input. Try inputs in declared order; first
+            # hit wins. Used for Ucupaint clamps and unbaked layer chains.
+            for inp in upstream.inputs:
+                n = inp.name.lower()
+                if n in ("fac", "factor"):
+                    continue
+                # MIX node has typed sockets; only follow color-ish ones
+                if hasattr(inp, "type") and inp.type not in ("RGBA", "VECTOR"):
+                    continue
+                if not inp.is_linked:
+                    continue
+                hit = self._walk_to_image(
+                    inp, _group_stack, _visited, _depth + 1,
+                )
+                if hit is not None:
+                    return hit
         return None
 
     def _gather_pbr(
@@ -233,6 +312,76 @@ class MaterialExporter:
 
         return "BLEND", None
 
+    # Common input names that custom shader groups use for the diffuse/base
+    # color and alpha sockets. Ordered by preference.
+    _GROUP_BASE_COLOR_INPUTS = ("Base Color", "BaseColor", "Color", "Diffuse", "Albedo")
+    _GROUP_ALPHA_INPUTS = ("Alpha", "Opacity")
+    _GROUP_NORMAL_INPUTS = ("Normal", "Normal Map")
+
+    def _gather_from_surface_group(
+        self, blender_material: "bpy.types.Material",
+    ) -> tuple["MaterialPBRMetallicRoughness | None", str | None, float | None]:
+        """Fallback for materials with no Principled BSDF: walk
+        Material Output.Surface, and if it's a custom shader group, try to
+        recover (base color factor + texture, alpha mode) from common input
+        names (Diffuse, Color, Alpha, …).
+        Returns (pbr or None, alpha_mode, alpha_cutoff).
+        """
+        if not blender_material.use_nodes or blender_material.node_tree is None:
+            return None, None, None
+
+        out_node = next(
+            (n for n in blender_material.node_tree.nodes if n.type == "OUTPUT_MATERIAL"),
+            None,
+        )
+        if out_node is None:
+            return None, None, None
+        surface = out_node.inputs.get("Surface")
+        if surface is None or not surface.is_linked:
+            return None, None, None
+
+        group_node = surface.links[0].from_node
+        if group_node.type != "GROUP" or getattr(group_node, "node_tree", None) is None:
+            return None, None, None
+
+        bc_socket = None
+        for name in self._GROUP_BASE_COLOR_INPUTS:
+            s = group_node.inputs.get(name)
+            if s is not None:
+                bc_socket = s
+                break
+        bc_factor, bc_tex = self._read_color_socket(bc_socket) if bc_socket else (None, None)
+
+        # Alpha: only emit a mode if the group exposes an alpha socket.
+        alpha_mode = None
+        alpha_cutoff = None
+        for name in self._GROUP_ALPHA_INPUTS:
+            a = group_node.inputs.get(name)
+            if a is None:
+                continue
+            blend_method = (
+                blender_material.surface_render_method
+                if hasattr(blender_material, "surface_render_method")
+                else getattr(blender_material, "blend_method", "OPAQUE")
+            )
+            if blend_method in ("CLIP", "HASHED"):
+                threshold = getattr(blender_material, "alpha_threshold", 0.5)
+                alpha_mode, alpha_cutoff = "MASK", (
+                    float(threshold) if threshold != 0.5 else None
+                )
+            elif blend_method != "OPAQUE":
+                alpha_mode = "BLEND"
+            break
+
+        if bc_factor is None and bc_tex is None:
+            return None, alpha_mode, alpha_cutoff
+
+        pbr = MaterialPBRMetallicRoughness(
+            base_color_factor=bc_factor,
+            base_color_texture=bc_tex,
+        )
+        return pbr, alpha_mode, alpha_cutoff
+
     def _gather_layers(
         self, blender_material: "bpy.types.Material",
     ) -> list[dict] | None:
@@ -241,15 +390,212 @@ class MaterialExporter:
         if principled is None:
             return None
         chain = self._collect_layer_chain(principled)
-        if not chain:
-            return None
+        if chain:
+            layers: list[dict] = []
+            for node in chain:
+                layer = self._gather_one_layer(node)
+                if layer is not None:
+                    layers.append(layer)
+            return layers or None
 
-        layers: list[dict] = []
-        for node in chain:
-            layer = self._gather_one_layer(node)
+        # Ucupaint integration: when Principled.Base Color is fed by a Ucupaint
+        # group with >=2 painted layers, export each `.yP Layer …` sub-group as
+        # a glTF material layer. Single-layer Ucupaint already round-trips via
+        # the regular pbrMetallicRoughness path through the walker.
+        bc_socket = principled.inputs.get("Base Color")
+        if bc_socket is None or not bc_socket.is_linked:
+            return None
+        upstream = bc_socket.links[0].from_node
+        if not self._is_ucupaint_group(upstream):
+            return None
+        layer_nodes = self._collect_ucupaint_layers(upstream)
+        if len(layer_nodes) < 2:
+            return None
+        layers = []
+        for ln in layer_nodes:
+            layer = self._gather_one_ucupaint_layer(ln)
             if layer is not None:
                 layers.append(layer)
-        return layers or None
+        # Only emit the extension when at least 2 non-empty layers survive —
+        # a single layer would round-trip as plain pbrMetallicRoughness.
+        if len(layers) < 2:
+            return None
+        return layers
+
+    def _is_ucupaint_group(self, node) -> bool:
+        return (
+            getattr(node, "type", None) == "GROUP"
+            and getattr(node, "node_tree", None) is not None
+            and node.node_tree.name.startswith(UCUPAINT_GROUP_PREFIX)
+        )
+
+    def _is_ucupaint_layer_group(self, node) -> bool:
+        return (
+            getattr(node, "type", None) == "GROUP"
+            and getattr(node, "node_tree", None) is not None
+            and node.node_tree.name.startswith(UCUPAINT_LAYER_PREFIX)
+        )
+
+    def _collect_ucupaint_layers(self, ucu_group_node) -> list:
+        """Return `.yP Layer …` sub-group nodes inside the Ucupaint group, in
+        base→top order. Walks back from GROUP_OUTPUT.Color through the layer
+        chain (passing through MIX/Reroute clamps); falls back to node-list
+        order if the chain can't be resolved.
+        """
+        tree = ucu_group_node.node_tree
+        if tree is None:
+            return []
+
+        gout = next((n for n in tree.nodes if n.type == "GROUP_OUTPUT"), None)
+        layers: list = []
+        seen_layer_ids: set[int] = set()
+        if gout is not None:
+            sock = gout.inputs.get("Color")
+            depth = 0
+            while sock is not None and sock.is_linked and depth < 64:
+                depth += 1
+                up = sock.links[0].from_node
+                if self._is_ucupaint_layer_group(up):
+                    if id(up) in seen_layer_ids:
+                        break
+                    seen_layer_ids.add(id(up))
+                    layers.append(up)
+                    # Find this layer's "below"/background input to continue
+                    # walking down the stack.
+                    below = None
+                    for cand in (
+                        "Background", "Below Color", "Color Below",
+                        "Below", "Bottom",
+                    ):
+                        s = up.inputs.get(cand)
+                        if s is not None and s.is_linked:
+                            below = s
+                            break
+                    if below is None:
+                        for inp in up.inputs:
+                            if inp.is_linked and getattr(inp, "type", None) == "RGBA":
+                                below = inp
+                                break
+                    sock = below
+                    continue
+                if up.type in ("MIX", "MIX_RGB", "REROUTE"):
+                    next_sock = None
+                    for inp in up.inputs:
+                        n = inp.name.lower()
+                        if n in ("fac", "factor"):
+                            continue
+                        if hasattr(inp, "type") and inp.type not in ("RGBA", "VECTOR"):
+                            continue
+                        if inp.is_linked:
+                            next_sock = inp
+                            break
+                    sock = next_sock
+                    continue
+                break
+
+        if layers:
+            layers.reverse()  # base → top
+            return layers
+        # Fallback: enumerate all `.yP Layer …` groups (order undefined).
+        return [n for n in tree.nodes if self._is_ucupaint_layer_group(n)]
+
+    def _find_labeled_tex_image(self, tree, label_prefix):
+        if tree is None:
+            return None
+        for n in tree.nodes:
+            if n.type == "TEX_IMAGE" and n.label.startswith(label_prefix):
+                return n
+        return None
+
+    @staticmethod
+    def _tex_info_to_dict(ti) -> dict:
+        d = {"index": ti.index}
+        if getattr(ti, "tex_coord", None) is not None:
+            d["texCoord"] = ti.tex_coord
+        if getattr(ti, "extensions", None):
+            d["extensions"] = ti.extensions
+        return d
+
+    def _gather_one_ucupaint_layer(self, layer_node) -> dict | None:
+        """Build a glTF material-layer dict from a `.yP Layer …` sub-group."""
+        tree = getattr(layer_node, "node_tree", None)
+        if tree is None:
+            return None
+
+        layer: dict = {}
+        if layer_node.label:
+            layer["name"] = layer_node.label
+        else:
+            name = tree.name
+            if name.startswith(UCUPAINT_LAYER_PREFIX):
+                name = name[len(UCUPAINT_LAYER_PREFIX):]
+            layer["name"] = name
+
+        pbr: dict = {}
+
+        src = self._find_labeled_tex_image(tree, "Source")
+        if src is not None:
+            ti = self.texture_exporter.gather_texture_info(src)
+            if ti is not None:
+                pbr["baseColorTexture"] = self._tex_info_to_dict(ti)
+
+        mr_node = (
+            self._find_labeled_tex_image(tree, "Metallic Override")
+            or self._find_labeled_tex_image(tree, "Roughness Override")
+        )
+        if mr_node is not None:
+            ti = self.texture_exporter.gather_texture_info(mr_node)
+            if ti is not None:
+                pbr["metallicRoughnessTexture"] = self._tex_info_to_dict(ti)
+
+        if pbr:
+            layer["pbrMetallicRoughness"] = pbr
+
+        normal_node = (
+            self._find_labeled_tex_image(tree, "Normal Override 1")
+            or self._find_labeled_tex_image(tree, "Normal Override")
+        )
+        if normal_node is not None:
+            ti = self.texture_exporter.gather_texture_info(normal_node)
+            if ti is not None:
+                layer["normalTexture"] = self._tex_info_to_dict(ti)
+
+        # Mask: Ucupaint stores mask images as TEX_IMAGE nodes labeled like
+        # "Mask : IMAGE" or starting with "Mask".
+        mask_node = self._find_labeled_tex_image(tree, "Mask")
+        if mask_node is not None:
+            ti = self.texture_exporter.gather_texture_info(mask_node)
+            if ti is not None:
+                layer["mask"] = {
+                    "source": "TEXTURE",
+                    "texture": self._tex_info_to_dict(ti),
+                }
+
+        # Blend mode from the layer-internal Color blend node.
+        blend_node = next(
+            (
+                n for n in tree.nodes
+                if n.type in ("MIX", "MIX_RGB") and n.label == "Blend"
+            ),
+            None,
+        )
+        if blend_node is not None:
+            bt = getattr(blend_node, "blend_type", "MIX")
+            if bt in _VALID_BLEND_MODES and bt != "MIX":
+                layer["blendMode"] = bt
+
+        # Drop empty layers — a layer with no images and no mask carries no
+        # information that the renderer can act on. This filters out
+        # Ucupaint's "Solid Color" (no image) layers.
+        has_content = (
+            "pbrMetallicRoughness" in layer
+            or "normalTexture" in layer
+            or "mask" in layer
+        )
+        if not has_content:
+            return None
+
+        return layer
 
     def _is_layer_node(self, node) -> bool:
         return (
@@ -280,18 +626,7 @@ class MaterialExporter:
 
     def _image_node_from_socket(self, socket):
         """Like _get_connected_image_node but takes a socket directly."""
-        if socket is None or not socket.is_linked:
-            return None
-        linked = socket.links[0].from_node
-        if linked.type == "TEX_IMAGE":
-            return linked
-        if linked.type == "NORMAL_MAP":
-            color_socket = linked.inputs.get("Color")
-            if color_socket and color_socket.is_linked:
-                inner = color_socket.links[0].from_node
-                if inner.type == "TEX_IMAGE":
-                    return inner
-        return None
+        return self._walk_to_image(socket)
 
     def _read_color_socket(self, socket):
         """Resolve a color socket to (factor, TextureInfo).
@@ -299,6 +634,12 @@ class MaterialExporter:
         Handles the common upstream cases: Image Texture (texture wins, factor
         is the socket's local default), RGB node (read its output value as the
         factor), or unlinked (read socket default).
+
+        When a socket is linked through pass-through nodes (Reroute, Group)
+        but no image texture is reachable, the upstream output's
+        `default_value` is often a stale evaluated value (commonly black for
+        unevaluated group outputs). The Principled-side socket's
+        `default_value` is a more reliable user-visible factor, so prefer it.
         """
         if socket is None:
             return None, None
@@ -311,10 +652,15 @@ class MaterialExporter:
 
         if socket.is_linked:
             from_socket = socket.links[0].from_socket
-            v = getattr(from_socket, "default_value", None)
-            if v is not None and hasattr(v, "__len__") and len(v) >= 3:
-                a = v[3] if len(v) >= 4 else 1.0
-                return [v[0], v[1], v[2], a], None
+            from_node = socket.links[0].from_node
+            # For RGB-style upstreams (RGB, Value->Combine, Color attribute),
+            # the output default is meaningful. For Group / Reroute / shader
+            # nodes, prefer the Principled-side default.
+            if getattr(from_node, "type", None) in {"RGB", "VALUE", "COMBINE_COLOR", "COMBINE_RGB"}:
+                v = getattr(from_socket, "default_value", None)
+                if v is not None and hasattr(v, "__len__") and len(v) >= 3:
+                    a = v[3] if len(v) >= 4 else 1.0
+                    return [v[0], v[1], v[2], a], None
 
         v = socket.default_value
         return [v[0], v[1], v[2], v[3]], None
