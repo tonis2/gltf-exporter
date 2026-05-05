@@ -268,24 +268,26 @@ class AnimationExporter:
                     quats[i] = [q.w, q.x, q.y, q.z]
             values = quats
 
-        # Apply coordinate conversion
-        is_camera_rot = (
-            gltf_path == "rotation"
-            and obj.type == "CAMERA"
-            and self.settings.export_camera_y_up
+        # Apply coordinate conversion. Lights and (optionally) cameras need the
+        # extra Rx(-90°) post-fix so their forward direction matches scene.py's
+        # static rest-pose conversion — without this an animated light snaps
+        # 90° on the first keyframe.
+        needs_camera_fix = gltf_path == "rotation" and (
+            obj.type == "LIGHT"
+            or (obj.type == "CAMERA" and self.settings.export_camera_y_up)
         )
         if gltf_interp == "CUBICSPLINE":
             # For cubicspline, values are interleaved: [in_tangent, value, out_tangent] x N
             # Reshape to (N*3, components), convert, reshape back
             n_keyframes = len(sorted_frames)
             flat = values.reshape(n_keyframes * 3, -1)
-            if is_camera_rot:
+            if needs_camera_fix:
                 flat = convert_rotation_camera_array(flat)
             else:
                 flat = self._convert_values(flat, gltf_path)
             values = flat.reshape(n_keyframes * 3, -1)
         else:
-            if is_camera_rot:
+            if needs_camera_fix:
                 values = convert_rotation_camera_array(values)
             else:
                 values = self._convert_values(values, gltf_path)
