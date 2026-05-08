@@ -107,10 +107,14 @@ class SceneExporter:
             for idx in instancing_nodes:
                 root_nodes.append(idx)
             # Only skip objects that are purely instancers (empties with collection instances)
-            # or source objects that aren't real scene objects.
+            # or source objects that aren't real scene objects. Geometry-bearing types
+            # (mesh/curve/curves/grease pencil) often emit instances *and* their own
+            # mesh (e.g., a curve with a vine GN modifier produces stem mesh + leaf
+            # instances) — those must still be exported.
+            geometry_bearing = {"MESH", "CURVE", "SURFACE", "FONT", "META", "CURVES", "GREASEPENCIL"}
             for name in self._instancer_names:
                 obj = scene.objects.get(name)
-                if obj and obj.type != "MESH":
+                if obj and obj.type not in geometry_bearing:
                     skip_objects.add(name)
             # Skip source meshes that only exist as instance sources
             for name in self._instanced_source_names:
@@ -167,6 +171,12 @@ class SceneExporter:
             # Build material slot -> glTF material index mapping
             material_map = self._gather_materials_for_object(obj)
             mesh_index = self.mesh_exporter.gather(obj, material_map, joint_map)
+        elif obj.type in {"CURVE", "SURFACE", "FONT", "META", "CURVES", "GREASEPENCIL"}:
+            # Evaluate the modifier stack to a mesh (e.g., a curve or hair
+            # curves object with a Geometry Nodes modifier emits stem
+            # geometry as a mesh that should be exported).
+            material_map = self._gather_materials_for_object(obj)
+            mesh_index = self.mesh_exporter.gather(obj, material_map)
         elif obj.type == "CAMERA":
             camera_index = self._gather_camera(obj)
         elif obj.type == "LIGHT":

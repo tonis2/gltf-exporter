@@ -30,8 +30,16 @@ class MeshExporter:
         """Export mesh data from a Blender object. Returns mesh index or None."""
         import bpy
 
-        if blender_object.type != "MESH":
+        # Accept any type whose post-modifier evaluation can yield mesh data.
+        # MESH/CURVE/SURFACE/FONT/META go through the legacy `to_mesh()` path.
+        # CURVES/GREASEPENCIL use the Blender 5.x `evaluated_geometry().mesh`
+        # API since `to_mesh()` raises "Object does not have geometry data" on
+        # those types — but their GN modifiers can still emit mesh output.
+        legacy_to_mesh_types = {"MESH", "CURVE", "SURFACE", "FONT", "META"}
+        geometry_set_types = {"CURVES", "GREASEPENCIL"}
+        if blender_object.type not in legacy_to_mesh_types | geometry_set_types:
             return None
+        use_geometry_set = blender_object.type in geometry_set_types
 
         # Temporarily disable armature modifier for rest-pose vertices
         armature_mod = None
@@ -47,18 +55,34 @@ class MeshExporter:
         try:
             depsgraph = bpy.context.evaluated_depsgraph_get()
             eval_obj = blender_object.evaluated_get(depsgraph)
-            blender_mesh = eval_obj.to_mesh()
+            if use_geometry_set:
+                geo = eval_obj.evaluated_geometry()
+                blender_mesh = geo.mesh if geo is not None else None
+            else:
+                blender_mesh = eval_obj.to_mesh()
         finally:
             if armature_mod is not None:
                 armature_mod.show_viewport = armature_was_visible
 
+        # to_mesh() owns its mesh and needs to_mesh_clear() to free it;
+        # evaluated_geometry().mesh is owned by the GeometrySet — never clear.
+        def _release_mesh():
+            if not use_geometry_set:
+                eval_obj.to_mesh_clear()
+
         if blender_mesh is None or len(blender_mesh.vertices) == 0:
-            eval_obj.to_mesh_clear()
+            _release_mesh()
             return None
 
-        cache_key = blender_mesh.name
+        # GeometrySet meshes share a generic name (e.g. "Mesh") across objects,
+        # so disambiguate by the source object's data name when going through
+        # that path — otherwise two GN-driven curves would dedupe into one mesh.
+        if use_geometry_set:
+            cache_key = f"__gset__:{blender_object.data.name}"
+        else:
+            cache_key = blender_mesh.name
         if cache_key in self._cache:
-            eval_obj.to_mesh_clear()
+            _release_mesh()
             return self._cache[cache_key]
 
         # Extract shape key deltas before evaluation (shape keys live on original data)
@@ -80,7 +104,7 @@ class MeshExporter:
                 shape_key_data, joint_data, weight_data,
             )
         finally:
-            eval_obj.to_mesh_clear()
+            _release_mesh()
 
         if mesh is None:
             return None

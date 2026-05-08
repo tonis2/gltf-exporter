@@ -174,6 +174,11 @@ class AnimationExporter:
         channels: list[AnimationChannel] = []
         samplers: list[AnimationSampler] = []
 
+        # Find the earliest keyframe across all channels so we can rebase the whole
+        # action to t=0 with a shared origin. Per-channel normalization would desync
+        # channels that originally started at different frames.
+        f_origin = self._earliest_keyframe(obj_action_pairs)
+
         for obj, action in obj_action_pairs:
             node_index = self.object_to_node_index[obj.name]
 
@@ -190,7 +195,7 @@ class AnimationExporter:
                 if data_path == "rotation_euler" and "rotation_quaternion" in fcurve_groups:
                     continue
                 result = self._gather_trs_channel(
-                    obj, node_index, fcurve_groups[data_path], data_path, fps,
+                    obj, node_index, fcurve_groups[data_path], data_path, fps, f_origin,
                 )
                 if result is not None:
                     sampler, channel = result
@@ -204,6 +209,18 @@ class AnimationExporter:
 
         return Animation(name=action_name, channels=channels, samplers=samplers)
 
+    @staticmethod
+    def _earliest_keyframe(
+        obj_action_pairs: list[tuple["bpy.types.Object", "bpy.types.Action"]],
+    ) -> float:
+        f_min: float | None = None
+        for obj, action in obj_action_pairs:
+            for fc in _get_fcurves(action, obj.animation_data):
+                for kp in fc.keyframe_points:
+                    if f_min is None or kp.co[0] < f_min:
+                        f_min = kp.co[0]
+        return f_min if f_min is not None else 0.0
+
     def _gather_trs_channel(
         self,
         obj: "bpy.types.Object",
@@ -211,6 +228,7 @@ class AnimationExporter:
         fcurves: dict[int, "bpy.types.FCurve"],
         data_path: str,
         fps: float,
+        f_origin: float = 0.0,
     ) -> tuple[AnimationSampler, AnimationChannel] | None:
         """Build a sampler + channel for one TRS property."""
         gltf_path, data_type = _TRS_PATH_MAP[data_path]
@@ -225,13 +243,29 @@ class AnimationExporter:
         if not frames:
             return None
 
+        # rotation_euler stores angles, but glTF only carries quaternions. With sparse
+        # keyframes (e.g. 0° and 360° at endpoints) both convert to identity quaternion
+        # and the rotation is lost on export. Densify rotation_euler at scene fps so
+        # Blender's per-component angle LERP is preserved through the conversion.
+        if data_path == "rotation_euler" and len(frames) >= 2:
+            f_min = min(frames)
+            f_max = max(frames)
+            for f in range(int(f_min), int(f_max) + 1):
+                frames.add(float(f))
+
         sorted_frames = sorted(frames)
-        times = np.array([f / fps for f in sorted_frames], dtype=np.float32)
+        # Rebase to action-shared t=0 origin. Runtime samplers (e.g. scene bake
+        # loops) walk t from 0..duration; if min_time > 0 they extrapolate past
+        # the first keyframe and emit garbage poses.
+        times = np.array([(f - f_origin) / fps for f in sorted_frames], dtype=np.float32)
 
         # Determine interpolation from first keyframe of first fcurve
         first_fcurve = next(iter(fcurves.values()))
         blender_interp = first_fcurve.keyframe_points[0].interpolation if first_fcurve.keyframe_points else "LINEAR"
         gltf_interp = _INTERPOLATION_MAP.get(blender_interp, "LINEAR")
+        # Densified frames don't carry tangent data, so fall back to LINEAR for them.
+        if data_path == "rotation_euler" and gltf_interp == "CUBICSPLINE":
+            gltf_interp = "LINEAR"
 
         # Get rest values for missing components
         rest_values = self._get_rest_values(obj, data_path, num_components)
@@ -423,6 +457,9 @@ class AnimationExporter:
                 data_path = match.group(2)
                 bone_fcurves[(bone_name, data_path)][fcurve.array_index] = fcurve
 
+        # Action-wide t=0 origin so all bones stay in sync after rebasing.
+        f_origin = self._earliest_keyframe([(armature_obj, action)])
+
         for (bone_name, data_path), fc_dict in bone_fcurves.items():
             if bone_name not in self.bone_to_node_index:
                 continue
@@ -431,7 +468,7 @@ class AnimationExporter:
                 continue
 
             result = self._gather_bone_trs_channel(
-                armature_obj, bone_name, fc_dict, data_path, fps,
+                armature_obj, bone_name, fc_dict, data_path, fps, f_origin,
             )
             if result is not None:
                 sampler, channel = result
@@ -452,6 +489,7 @@ class AnimationExporter:
         fcurves: dict[int, "bpy.types.FCurve"],
         data_path: str,
         fps: float,
+        f_origin: float = 0.0,
     ) -> "tuple[AnimationSampler, AnimationChannel] | None":
         """Build sampler + channel for one bone TRS property.
 
@@ -483,13 +521,24 @@ class AnimationExporter:
         if not frames:
             return None
 
+        # See _gather_trs_channel: rotation_euler must be densified at scene fps so
+        # Blender's per-component angle LERP survives the quaternion conversion.
+        if data_path == "rotation_euler" and len(frames) >= 2:
+            f_min = min(frames)
+            f_max = max(frames)
+            for f in range(int(f_min), int(f_max) + 1):
+                frames.add(float(f))
+
         sorted_frames = sorted(frames)
-        times = np.array([f / fps for f in sorted_frames], dtype=np.float32)
+        # See _gather_trs_channel: rebase to action-shared t=0 origin.
+        times = np.array([(f - f_origin) / fps for f in sorted_frames], dtype=np.float32)
 
         # Determine interpolation
         first_fcurve = next(iter(fcurves.values()))
         blender_interp = first_fcurve.keyframe_points[0].interpolation if first_fcurve.keyframe_points else "LINEAR"
         gltf_interp = _INTERPOLATION_MAP.get(blender_interp, "LINEAR")
+        if data_path == "rotation_euler" and gltf_interp == "CUBICSPLINE":
+            gltf_interp = "LINEAR"
 
         # Rest values for pose bone deltas (identity)
         if data_path in ("location",):
@@ -632,7 +681,8 @@ class AnimationExporter:
             return None
 
         sorted_frames = sorted(all_frames)
-        times = np.array([f / fps for f in sorted_frames], dtype=np.float32)
+        f_origin = sorted_frames[0]
+        times = np.array([(f - f_origin) / fps for f in sorted_frames], dtype=np.float32)
 
         # Evaluate all weights at each keyframe, interleaved
         # glTF format: [w0_t0, w1_t0, ..., w0_t1, w1_t1, ...]
@@ -733,7 +783,8 @@ class AnimationExporter:
                 continue
 
             sorted_frames = sorted(all_frames)
-            times = np.array([f / fps for f in sorted_frames], dtype=np.float32)
+            f_origin = sorted_frames[0]
+            times = np.array([(f - f_origin) / fps for f in sorted_frames], dtype=np.float32)
 
             # Evaluate values
             # Get default value for missing components
